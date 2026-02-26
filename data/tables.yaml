@@ -1,0 +1,9 @@
+tables:
+  - TABLE_NAME: t1
+    COLUMNS:
+      - NAME: col1
+        COL_TYPE: bigint
+        DESCRIPTION: "this is a test col"
+      - NAME: col2
+        COL_TYPE: varchar
+        DESCRIPTION: "this is a char col"

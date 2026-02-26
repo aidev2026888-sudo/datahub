@@ -1,0 +1,9 @@
+query_templates:
+  - parameterized_intent: "total cost"
+    parameterized_sql: |
+      select * from t1
+      where costtype = 1
+  - parameterized_intent: "total budget"
+    parameterized_sql: |
+      select * from t1
+      where costtype = 2
