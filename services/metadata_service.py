@@ -21,7 +21,7 @@ class DataHubMetadataService:
     """High-level read interface to a DataHub metadata graph."""
 
     def __init__(self, server: str, token: str | None = None):
-        cfg = DatahubClientConfig(server=server, token=token)
+        cfg = DatahubClientConfig(server=server, token=token, disable_ssl_verification=True)
         self.graph = DataHubGraph(cfg)
 
     # ------------------------------------------------------------------

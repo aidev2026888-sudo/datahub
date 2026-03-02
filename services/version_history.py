@@ -13,7 +13,7 @@ class VersionHistoryService:
     """Retrieve historical aspect versions from DataHub."""
 
     def __init__(self, server: str, token: str | None = None):
-        cfg = DatahubClientConfig(server=server, token=token)
+        cfg = DatahubClientConfig(server=server, token=token, disable_ssl_verification=True)
         self.graph = DataHubGraph(cfg)
 
     def get_term_history(self, term_urn: str, max_versions: int = 5) -> str:
