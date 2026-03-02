@@ -16,9 +16,9 @@ Python CLI tool for ingesting metadata from YAML files into [DataHub](https://da
 setup_env.bat
 
 # Or manually
-python -m venv .venv
+uv venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ## Configuration

@@ -33,6 +33,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_it.add_argument("--file", default="data/tables.yaml", help="Path to tables YAML")
     p_it.add_argument("--platform", default=None, help="Data platform (e.g. postgres)")
     p_it.add_argument("--env", default=None, help="Environment (PROD/DEV/STAGING)")
+    p_it.add_argument("--db", default=None, help="Database name (e.g. mydb)")
+    p_it.add_argument("--schema", default=None, help="Schema name (e.g. public)")
     p_it.add_argument("--dry-run", action="store_true", help="Parse YAML only, don't emit")
 
     p_iq = sub.add_parser("ingest-templates", help="Ingest query templates from YAML")
@@ -46,7 +48,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # ----- Fetch commands -----
     p_lt = sub.add_parser("list-tables", help="List tables in a database")
     p_lt.add_argument("--platform", required=True, help="Data platform (e.g. postgres)")
-    p_lt.add_argument("--db", required=True, help="Database name")
+    p_lt.add_argument("--db", default=None, help="Database name (optional filter)")
+    p_lt.add_argument("--schema", default=None, help="Schema name (optional filter)")
 
     p_lc = sub.add_parser("list-columns", help="List columns for a dataset")
     p_lc.add_argument("--urn", required=True, help="Dataset URN")
@@ -76,7 +79,7 @@ def main():
     # ---- Ingestion ----
     if args.command == "ingest-tables":
         from etl.ingest import ingest_tables
-        ingest_tables(args.file, platform=args.platform, env=args.env, dry_run=args.dry_run)
+        ingest_tables(args.file, platform=args.platform, env=args.env, db=args.db, schema=args.schema, dry_run=args.dry_run)
 
     elif args.command == "ingest-templates":
         from etl.ingest import ingest_query_templates
@@ -95,7 +98,7 @@ def main():
             token=config.DATAHUB_TOKEN or None,
         )
         if args.command == "list-tables":
-            print(svc.list_tables(args.platform, args.db))
+            print(svc.list_tables(args.platform, db_name=args.db, schema_name=args.schema))
         elif args.command == "list-columns":
             print(svc.list_columns(args.urn))
         elif args.command == "sql-fragments":

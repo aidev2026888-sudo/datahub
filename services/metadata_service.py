@@ -27,28 +27,50 @@ class DataHubMetadataService:
     # ------------------------------------------------------------------
     # 1. List tables
     # ------------------------------------------------------------------
-    def list_tables(self, platform: str, db_name: str) -> str:
+    def list_tables(
+        self,
+        platform: str,
+        db_name: str | None = None,
+        schema_name: str | None = None,
+    ) -> str:
         """
-        List all tables (datasets) inside a database.
+        List all tables (datasets), optionally filtered by database and/or schema.
 
-        Uses DataHub search to find datasets whose browse path
-        contains the database name.
+        Uses DataHub search with browse-path filters.
+        URN convention: urn:li:dataset:(urn:li:dataPlatform:<platform>,<db>.<schema>.<table>,<env>)
         """
-        query = f"browsePaths:*{db_name}*"
+        # Build query parts
+        parts = []
+        if db_name:
+            parts.append(f"browsePaths:*{db_name}*")
+        if schema_name:
+            parts.append(f"browsePaths:*{schema_name}*")
+        query = " AND ".join(parts) if parts else "*"
+
         results = self.graph.search(entity_type="dataset", query=query, count=50)
 
         output = []
         for entity in results:
             urn = entity.urn
-            # Extract table name from URN
-            # e.g. urn:li:dataset:(urn:li:dataPlatform:postgres,db.public.users,PROD)
-            table_name = urn.split(",")[1] if "," in urn else urn
+            # Parse the dataset name from URN
+            # e.g. urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)
+            dataset_name = urn.split(",")[1] if "," in urn else urn
+            name_parts = dataset_name.split(".")
+
+            if len(name_parts) >= 3:
+                db, schema, table = name_parts[0], name_parts[1], ".".join(name_parts[2:])
+            elif len(name_parts) == 2:
+                db, schema, table = "", name_parts[0], name_parts[1]
+            else:
+                db, schema, table = "", "", dataset_name
 
             properties = self.graph.get_aspect(urn, "datasetProperties")
             desc = properties.description if properties else ""
 
             output.append({
-                "table_name": table_name,
+                "database": db,
+                "schema": schema,
+                "table": table,
                 "urn": urn,
                 "description": desc,
             })

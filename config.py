@@ -15,3 +15,9 @@ DEFAULT_PLATFORM = os.getenv("DATAHUB_PLATFORM", "postgres")
 
 # Default environment tag (PROD, DEV, STAGING)
 DEFAULT_ENV = os.getenv("DATAHUB_ENV", "PROD")
+
+# Default database name (used in dataset URN: <db>.<schema>.<table>)
+DEFAULT_DATABASE = os.getenv("DATAHUB_DATABASE", "")
+
+# Default schema name (used in dataset URN: <db>.<schema>.<table>)
+DEFAULT_SCHEMA = os.getenv("DATAHUB_SCHEMA", "public")

@@ -79,7 +79,14 @@ def _map_col_type(col_type: str):
 # 1. Ingest tables & columns
 # ---------------------------------------------------------------------------
 
-def ingest_tables(yaml_path: str, platform: str | None = None, env: str | None = None, dry_run: bool = False):
+def ingest_tables(
+    yaml_path: str,
+    platform: str | None = None,
+    env: str | None = None,
+    db: str | None = None,
+    schema: str | None = None,
+    dry_run: bool = False,
+):
     """
     Read tables.yaml and emit Dataset entities with SchemaMetadata.
 
@@ -93,6 +100,8 @@ def ingest_tables(yaml_path: str, platform: str | None = None, env: str | None =
     """
     platform = platform or config.DEFAULT_PLATFORM
     env = env or config.DEFAULT_ENV
+    db = db or config.DEFAULT_DATABASE
+    schema = schema or config.DEFAULT_SCHEMA
 
     data = _load_yaml(yaml_path)
     tables = data.get("tables", [])
@@ -108,7 +117,11 @@ def ingest_tables(yaml_path: str, platform: str | None = None, env: str | None =
         table_name = table["TABLE_NAME"]
         columns = table.get("COLUMNS", [])
 
-        dataset_urn = f"urn:li:dataset:(urn:li:dataPlatform:{platform},{table_name},{env})"
+        # Build qualified name: db.schema.table (skip empty parts)
+        name_parts = [p for p in [db, schema, table_name] if p]
+        qualified_name = ".".join(name_parts)
+
+        dataset_urn = f"urn:li:dataset:(urn:li:dataPlatform:{platform},{qualified_name},{env})"
 
         # --- Schema fields ---
         fields = []
