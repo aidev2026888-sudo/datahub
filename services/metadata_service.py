@@ -67,18 +67,11 @@ class DataHubMetadataService:
             if schema_name and schema.lower() != schema_name.lower():
                 continue
 
-            try:
-                properties = self.graph.get_aspect(urn, DatasetPropertiesClass)
-                desc = properties.description if properties else ""
-            except Exception:
-                desc = ""
-
             output.append({
                 "database": db,
                 "schema": schema,
                 "table": table,
                 "urn": urn,
-                "description": desc,
             })
         return json.dumps(output, indent=2)
 

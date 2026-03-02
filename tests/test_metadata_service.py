@@ -112,19 +112,15 @@ class TestDataHubMetadataService(unittest.TestCase):
         self.assertEqual(result[0]["schema"], "")
         self.assertEqual(result[0]["table"], "users")
 
-    def test_list_tables_calls_get_aspect_with_class(self, MockGraph):
-        """Regression: get_aspect must receive a class, not a string."""
+    def test_list_tables_does_not_call_get_aspect(self, MockGraph):
+        """list_tables should not call get_aspect (no description fetch)."""
         svc = self._make_service(MockGraph)
         svc.graph.get_urns_by_filter.return_value = [
             "urn:li:dataset:(urn:li:dataPlatform:postgres,db.public.t1,PROD)",
         ]
-        svc.graph.get_aspect.return_value = None
 
         svc.list_tables("postgres")
-
-        # Verify get_aspect was called with the CLASS, not a string
-        call_args = svc.graph.get_aspect.call_args
-        self.assertIs(call_args[0][1], DatasetPropertiesClass)
+        svc.graph.get_aspect.assert_not_called()
 
     # ---------------------------------------------------------------
     # 2. list_columns
