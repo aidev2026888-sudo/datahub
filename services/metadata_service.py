@@ -81,17 +81,34 @@ class DataHubMetadataService:
     def list_columns(self, dataset_urn: str) -> str:
         """
         List columns (schema fields) for a given dataset URN.
+
+        Tries get_aspect first (positional args); if that fails, falls back
+        to get_entity_as_mcps which fetches all aspects as MCPs.
         """
+        schema: SchemaMetadataClass | None = None
+
+        # --- Primary: get_aspect with positional args (matches other methods) ---
         try:
-            schema: SchemaMetadataClass | None = self.graph.get_aspect(
-                entity_urn=dataset_urn,
-                aspect_type=SchemaMetadataClass,
-            )
+            schema = self.graph.get_aspect(dataset_urn, SchemaMetadataClass)
         except Exception as e:
-            return json.dumps([{"error": f"Failed to fetch schema: {e}"}])
+            print(f"[list_columns] get_aspect failed ({type(e).__name__}): {e}")
+
+        # --- Fallback: get_entity_as_mcps ---
+        if schema is None:
+            try:
+                mcps = self.graph.get_entity_as_mcps(
+                    entity_urn=dataset_urn,
+                    aspects=["schemaMetadata"],
+                )
+                for mcp in mcps:
+                    if isinstance(mcp.aspect, SchemaMetadataClass):
+                        schema = mcp.aspect
+                        break
+            except Exception as e2:
+                print(f"[list_columns] get_entity_as_mcps fallback also failed ({type(e2).__name__}): {e2}")
 
         if not schema:
-            return json.dumps([{"error": "No schema found for this dataset."}])
+            return json.dumps([{"error": f"No schema found for dataset {dataset_urn}."}])
 
         columns = []
         for field in schema.fields:
