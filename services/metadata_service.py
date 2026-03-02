@@ -47,11 +47,10 @@ class DataHubMetadataService:
             parts.append(f"browsePaths:*{schema_name}*")
         query = " AND ".join(parts) if parts else "*"
 
-        results = self.graph.search(entity_type="dataset", query=query, count=50)
+        urns = list(self.graph.get_urns_by_filter(entity_types=["dataset"], query=query))
 
         output = []
-        for entity in results:
-            urn = entity.urn
+        for urn in urns[:50]:
             # Parse the dataset name from URN
             # e.g. urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)
             dataset_name = urn.split(",")[1] if "," in urn else urn
@@ -110,12 +109,12 @@ class DataHubMetadataService:
         Excludes entities tagged 'Draft' to enforce approval workflow.
         """
         query_str = f"subjects:{dataset_urn} AND -tags:Draft"
-        results = self.graph.search(entity_type="query", query=query_str, count=20)
+        urns = list(self.graph.get_urns_by_filter(entity_types=["query"], query=query_str))
 
         output = []
-        for entity in results:
+        for urn in urns[:20]:
             props: QueryPropertiesClass | None = self.graph.get_aspect(
-                entity.urn, QueryPropertiesClass
+                urn, QueryPropertiesClass
             )
             if props:
                 output.append({
@@ -133,14 +132,14 @@ class DataHubMetadataService:
         """
         Return global query templates (tagged 'Template', excluding 'Draft').
         """
-        results = self.graph.search(
-            entity_type="query", query="tags:Template AND -tags:Draft", count=20
-        )
+        urns = list(self.graph.get_urns_by_filter(
+            entity_types=["query"], query="tags:Template AND -tags:Draft"
+        ))
 
         output = []
-        for entity in results:
+        for urn in urns[:20]:
             props: QueryPropertiesClass | None = self.graph.get_aspect(
-                entity.urn, QueryPropertiesClass
+                urn, QueryPropertiesClass
             )
             if props:
                 output.append({
@@ -156,17 +155,17 @@ class DataHubMetadataService:
         """
         Return approved business glossary terms (excludes 'Draft').
         """
-        results = self.graph.search(
-            entity_type="glossaryTerm", query="-tags:Draft", count=100
-        )
+        urns = list(self.graph.get_urns_by_filter(
+            entity_types=["glossaryTerm"], query="-tags:Draft"
+        ))
 
         output = []
-        for entity in results:
+        for urn in urns[:100]:
             info: GlossaryTermInfoClass | None = self.graph.get_aspect(
-                entity.urn, GlossaryTermInfoClass
+                urn, GlossaryTermInfoClass
             )
             if info:
-                name = info.name or entity.urn.split(":")[-1]
+                name = info.name or urn.split(":")[-1]
                 output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
 
         return json.dumps(output, indent=2)
