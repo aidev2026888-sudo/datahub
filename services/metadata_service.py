@@ -67,8 +67,11 @@ class DataHubMetadataService:
             if schema_name and schema.lower() != schema_name.lower():
                 continue
 
-            properties = self.graph.get_aspect(urn, DatasetPropertiesClass)
-            desc = properties.description if properties else ""
+            try:
+                properties = self.graph.get_aspect(urn, DatasetPropertiesClass)
+                desc = properties.description if properties else ""
+            except Exception:
+                desc = ""
 
             output.append({
                 "database": db,
@@ -86,10 +89,13 @@ class DataHubMetadataService:
         """
         List columns (schema fields) for a given dataset URN.
         """
-        schema: SchemaMetadataClass | None = self.graph.get_aspect(
-            entity_urn=dataset_urn,
-            aspect_type=SchemaMetadataClass,
-        )
+        try:
+            schema: SchemaMetadataClass | None = self.graph.get_aspect(
+                entity_urn=dataset_urn,
+                aspect_type=SchemaMetadataClass,
+            )
+        except Exception as e:
+            return json.dumps([{"error": f"Failed to fetch schema: {e}"}])
 
         if not schema:
             return json.dumps([{"error": "No schema found for this dataset."}])
@@ -119,21 +125,24 @@ class DataHubMetadataService:
 
         output = []
         for urn in urns[:20]:
-            # Skip entities tagged Draft
-            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
-                continue
+            try:
+                # Skip entities tagged Draft
+                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+                if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                    continue
 
-            props: QueryPropertiesClass | None = self.graph.get_aspect(
-                urn, QueryPropertiesClass
-            )
-            if props:
-                output.append({
-                    "name": props.name,
-                    "table_scope": dataset_urn,
-                    "intent": props.description,
-                    "sql_fragment": props.statement.value if props.statement else "",
-                })
+                props: QueryPropertiesClass | None = self.graph.get_aspect(
+                    urn, QueryPropertiesClass
+                )
+                if props:
+                    output.append({
+                        "name": props.name,
+                        "table_scope": dataset_urn,
+                        "intent": props.description,
+                        "sql_fragment": props.statement.value if props.statement else "",
+                    })
+            except Exception:
+                continue
         return json.dumps(output, indent=2)
 
     # ------------------------------------------------------------------
@@ -149,22 +158,25 @@ class DataHubMetadataService:
 
         output = []
         for urn in urns[:50]:
-            # Check tags: must have Template, must NOT have Draft
-            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-            tag_names = [t.tag for t in (tags.tags if tags else [])]
-            if "urn:li:tag:Template" not in tag_names:
-                continue
-            if "urn:li:tag:Draft" in tag_names:
-                continue
+            try:
+                # Check tags: must have Template, must NOT have Draft
+                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+                tag_names = [t.tag for t in (tags.tags if tags else [])]
+                if "urn:li:tag:Template" not in tag_names:
+                    continue
+                if "urn:li:tag:Draft" in tag_names:
+                    continue
 
-            props: QueryPropertiesClass | None = self.graph.get_aspect(
-                urn, QueryPropertiesClass
-            )
-            if props:
-                output.append({
-                    "parameterized_intent": props.description or "Generic Template",
-                    "parameterized_sql": props.statement.value if props.statement else "",
-                })
+                props: QueryPropertiesClass | None = self.graph.get_aspect(
+                    urn, QueryPropertiesClass
+                )
+                if props:
+                    output.append({
+                        "parameterized_intent": props.description or "Generic Template",
+                        "parameterized_sql": props.statement.value if props.statement else "",
+                    })
+            except Exception:
+                continue
         return json.dumps(output, indent=2)
 
     # ------------------------------------------------------------------
@@ -180,16 +192,19 @@ class DataHubMetadataService:
 
         output = []
         for urn in urns[:100]:
-            # Skip entities tagged Draft
-            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
-                continue
+            try:
+                # Skip entities tagged Draft
+                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+                if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                    continue
 
-            info: GlossaryTermInfoClass | None = self.graph.get_aspect(
-                urn, GlossaryTermInfoClass
-            )
-            if info:
-                name = info.name or urn.split(":")[-1]
-                output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
+                info: GlossaryTermInfoClass | None = self.graph.get_aspect(
+                    urn, GlossaryTermInfoClass
+                )
+                if info:
+                    name = info.name or urn.split(":")[-1]
+                    output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
+            except Exception:
+                continue
 
         return json.dumps(output, indent=2)
