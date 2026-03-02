@@ -7,8 +7,12 @@ Provides 5 methods mapped to the Agent's requirements:
   3. get_sql_fragments — queries linked to a dataset (excluding Draft)
   4. get_query_templates — global templates tagged 'Template'
   5. get_business_terms — glossary terms (excluding Draft)
+
+All aspect fetching uses DataHubGraph.get_entities() (OpenAPI v3 batchGet)
+instead of the legacy get_aspect() REST call.
 """
 import json
+from typing import Any
 from datahub.ingestion.graph.client import DatahubClientConfig, DataHubGraph
 from datahub.metadata.schema_classes import (
     DatasetPropertiesClass,
@@ -25,6 +29,42 @@ class DataHubMetadataService:
     def __init__(self, server: str, token: str | None = None):
         cfg = DatahubClientConfig(server=server, token=token, disable_ssl_verification=True)
         self.graph = DataHubGraph(cfg)
+
+    # ------------------------------------------------------------------
+    # Helper: fetch aspects for one or more entities via OpenAPI v3
+    # ------------------------------------------------------------------
+    def _fetch_entity_aspects(
+        self,
+        entity_name: str,
+        urns: list[str],
+        aspect_names: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Batch-fetch typed aspects for a list of URNs using the OpenAPI v3
+        ``/entity/{entity_name}/batchGet`` endpoint.
+
+        Returns:
+            ``{urn: {aspect_name: typed_aspect_object, ...}, ...}``
+            URNs with no matching aspects are omitted from the result.
+        """
+        if not urns:
+            return {}
+
+        try:
+            raw = self.graph.get_entities(
+                entity_name=entity_name,
+                urns=urns,
+                aspects=aspect_names,
+            )
+            # raw: Dict[urn, Dict[aspect_name, (typed_aspect, SystemMetadata|None)]]
+            # Strip the SystemMetadata wrapper for convenience
+            return {
+                urn: {name: tup[0] for name, tup in aspects.items()}
+                for urn, aspects in raw.items()
+            }
+        except Exception as e:
+            print(f"[_fetch_entity_aspects] Error ({type(e).__name__}): {e}")
+            return {}
 
     # ------------------------------------------------------------------
     # 1. List tables
@@ -81,33 +121,15 @@ class DataHubMetadataService:
     def list_columns(self, dataset_urn: str) -> str:
         """
         List columns (schema fields) for a given dataset URN.
-
-        Tries get_aspect first (positional args); if that fails, falls back
-        to get_entity_as_mcps which fetches all aspects as MCPs.
         """
-        schema: SchemaMetadataClass | None = None
+        aspects = self._fetch_entity_aspects(
+            entity_name="dataset",
+            urns=[dataset_urn],
+            aspect_names=["schemaMetadata"],
+        )
 
-        # --- Primary: get_aspect with positional args (matches other methods) ---
-        try:
-            schema = self.graph.get_aspect(dataset_urn, SchemaMetadataClass)
-        except Exception as e:
-            print(f"[list_columns] get_aspect failed ({type(e).__name__}): {e}")
-
-        # --- Fallback: get_entity_as_mcps ---
-        if schema is None:
-            try:
-                mcps = self.graph.get_entity_as_mcps(
-                    entity_urn=dataset_urn,
-                    aspects=["schemaMetadata"],
-                )
-                for mcp in mcps:
-                    if isinstance(mcp.aspect, SchemaMetadataClass):
-                        schema = mcp.aspect
-                        break
-            except Exception as e2:
-                print(f"[list_columns] get_entity_as_mcps fallback also failed ({type(e2).__name__}): {e2}")
-
-        if not schema:
+        schema = aspects.get(dataset_urn, {}).get("schemaMetadata")
+        if not isinstance(schema, SchemaMetadataClass):
             return json.dumps([{"error": f"No schema found for dataset {dataset_urn}."}])
 
         columns = []
@@ -132,27 +154,32 @@ class DataHubMetadataService:
             entity_types=["query"],
             query=f"*{dataset_urn}*",
         ))
+        urns = urns[:20]
+
+        # Batch-fetch globalTags + queryProperties for all query URNs
+        aspects = self._fetch_entity_aspects(
+            entity_name="query",
+            urns=urns,
+            aspect_names=["globalTags", "queryProperties"],
+        )
 
         output = []
-        for urn in urns[:20]:
-            try:
-                # Skip entities tagged Draft
-                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-                if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
-                    continue
+        for urn in urns:
+            entity = aspects.get(urn, {})
+            tags: GlobalTagsClass | None = entity.get("globalTags")
+            props: QueryPropertiesClass | None = entity.get("queryProperties")
 
-                props: QueryPropertiesClass | None = self.graph.get_aspect(
-                    urn, QueryPropertiesClass
-                )
-                if props:
-                    output.append({
-                        "name": props.name,
-                        "table_scope": dataset_urn,
-                        "intent": props.description,
-                        "sql_fragment": props.statement.value if props.statement else "",
-                    })
-            except Exception:
+            # Skip entities tagged Draft
+            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
                 continue
+
+            if props:
+                output.append({
+                    "name": props.name,
+                    "table_scope": dataset_urn,
+                    "intent": props.description,
+                    "sql_fragment": props.statement.value if props.statement else "",
+                })
         return json.dumps(output, indent=2)
 
     # ------------------------------------------------------------------
@@ -165,28 +192,33 @@ class DataHubMetadataService:
         urns = list(self.graph.get_urns_by_filter(
             entity_types=["query"],
         ))
+        urns = urns[:50]
+
+        # Batch-fetch globalTags + queryProperties for all query URNs
+        aspects = self._fetch_entity_aspects(
+            entity_name="query",
+            urns=urns,
+            aspect_names=["globalTags", "queryProperties"],
+        )
 
         output = []
-        for urn in urns[:50]:
-            try:
-                # Check tags: must have Template, must NOT have Draft
-                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-                tag_names = [t.tag for t in (tags.tags if tags else [])]
-                if "urn:li:tag:Template" not in tag_names:
-                    continue
-                if "urn:li:tag:Draft" in tag_names:
-                    continue
+        for urn in urns:
+            entity = aspects.get(urn, {})
+            tags: GlobalTagsClass | None = entity.get("globalTags")
+            props: QueryPropertiesClass | None = entity.get("queryProperties")
 
-                props: QueryPropertiesClass | None = self.graph.get_aspect(
-                    urn, QueryPropertiesClass
-                )
-                if props:
-                    output.append({
-                        "parameterized_intent": props.description or "Generic Template",
-                        "parameterized_sql": props.statement.value if props.statement else "",
-                    })
-            except Exception:
+            # Check tags: must have Template, must NOT have Draft
+            tag_names = [t.tag for t in (tags.tags if tags else [])]
+            if "urn:li:tag:Template" not in tag_names:
                 continue
+            if "urn:li:tag:Draft" in tag_names:
+                continue
+
+            if props:
+                output.append({
+                    "parameterized_intent": props.description or "Generic Template",
+                    "parameterized_sql": props.statement.value if props.statement else "",
+                })
         return json.dumps(output, indent=2)
 
     # ------------------------------------------------------------------
@@ -199,22 +231,27 @@ class DataHubMetadataService:
         urns = list(self.graph.get_urns_by_filter(
             entity_types=["glossaryTerm"],
         ))
+        urns = urns[:100]
+
+        # Batch-fetch globalTags + glossaryTermInfo for all term URNs
+        aspects = self._fetch_entity_aspects(
+            entity_name="glossaryTerm",
+            urns=urns,
+            aspect_names=["globalTags", "glossaryTermInfo"],
+        )
 
         output = []
-        for urn in urns[:100]:
-            try:
-                # Skip entities tagged Draft
-                tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
-                if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
-                    continue
+        for urn in urns:
+            entity = aspects.get(urn, {})
+            tags: GlobalTagsClass | None = entity.get("globalTags")
+            info: GlossaryTermInfoClass | None = entity.get("glossaryTermInfo")
 
-                info: GlossaryTermInfoClass | None = self.graph.get_aspect(
-                    urn, GlossaryTermInfoClass
-                )
-                if info:
-                    name = info.name or urn.split(":")[-1]
-                    output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
-            except Exception:
+            # Skip entities tagged Draft
+            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
                 continue
+
+            if info:
+                name = info.name or urn.split(":")[-1]
+                output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
 
         return json.dumps(output, indent=2)

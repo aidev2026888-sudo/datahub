@@ -2,7 +2,9 @@
 Unit tests for DataHubMetadataService.
 
 Uses unittest.mock to patch the DataHubGraph client so tests run without
-a live DataHub instance.
+a live DataHub instance.  All aspect fetches go through get_entities()
+(OpenAPI v3 batchGet), which returns:
+    {urn: {aspect_name: (typed_aspect, system_metadata), ...}, ...}
 """
 import json
 import unittest
@@ -22,6 +24,12 @@ from datahub.metadata.schema_classes import (
     TagAssociationClass,
     OtherSchemaClass,
 )
+
+
+def _aspect_tuple(aspect):
+    """Wrap a typed aspect into the (aspect, SystemMetadata) tuple that
+    get_entities() returns.  SystemMetadata is None in test context."""
+    return (aspect, None)
 
 
 # Patch DataHubGraph so it doesn't try to connect on init
@@ -45,9 +53,6 @@ class TestDataHubMetadataService(unittest.TestCase):
             "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)",
             "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.orders,PROD)",
         ]
-        props = MagicMock(spec=DatasetPropertiesClass)
-        props.description = "A table"
-        svc.graph.get_aspect.return_value = props
 
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(len(result), 2)
@@ -61,9 +66,6 @@ class TestDataHubMetadataService(unittest.TestCase):
             "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)",
             "urn:li:dataset:(urn:li:dataPlatform:postgres,otherdb.public.orders,PROD)",
         ]
-        props = MagicMock(spec=DatasetPropertiesClass)
-        props.description = ""
-        svc.graph.get_aspect.return_value = props
 
         result = json.loads(svc.list_tables("postgres", db_name="mydb"))
         self.assertEqual(len(result), 1)
@@ -75,9 +77,6 @@ class TestDataHubMetadataService(unittest.TestCase):
             "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.t1,PROD)",
             "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.analytics.t2,PROD)",
         ]
-        props = MagicMock(spec=DatasetPropertiesClass)
-        props.description = ""
-        svc.graph.get_aspect.return_value = props
 
         result = json.loads(svc.list_tables("postgres", schema_name="analytics"))
         self.assertEqual(len(result), 1)
@@ -89,9 +88,6 @@ class TestDataHubMetadataService(unittest.TestCase):
         svc.graph.get_urns_by_filter.return_value = [
             "urn:li:dataset:(urn:li:dataPlatform:postgres,public.users,PROD)",
         ]
-        props = MagicMock(spec=DatasetPropertiesClass)
-        props.description = ""
-        svc.graph.get_aspect.return_value = props
 
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(result[0]["database"], "")
@@ -103,30 +99,28 @@ class TestDataHubMetadataService(unittest.TestCase):
         svc.graph.get_urns_by_filter.return_value = [
             "urn:li:dataset:(urn:li:dataPlatform:postgres,users,PROD)",
         ]
-        props = MagicMock(spec=DatasetPropertiesClass)
-        props.description = ""
-        svc.graph.get_aspect.return_value = props
 
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(result[0]["database"], "")
         self.assertEqual(result[0]["schema"], "")
         self.assertEqual(result[0]["table"], "users")
 
-    def test_list_tables_does_not_call_get_aspect(self, MockGraph):
-        """list_tables should not call get_aspect (no description fetch)."""
+    def test_list_tables_does_not_call_get_entities(self, MockGraph):
+        """list_tables should not call get_entities (no aspect fetch needed)."""
         svc = self._make_service(MockGraph)
         svc.graph.get_urns_by_filter.return_value = [
             "urn:li:dataset:(urn:li:dataPlatform:postgres,db.public.t1,PROD)",
         ]
 
         svc.list_tables("postgres")
-        svc.graph.get_aspect.assert_not_called()
+        svc.graph.get_entities.assert_not_called()
 
     # ---------------------------------------------------------------
     # 2. list_columns
     # ---------------------------------------------------------------
     def test_list_columns_returns_fields(self, MockGraph):
         svc = self._make_service(MockGraph)
+        dataset_urn = "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.t1,PROD)"
         schema = SchemaMetadataClass(
             schemaName="t1",
             platform="urn:li:dataPlatform:postgres",
@@ -148,9 +142,11 @@ class TestDataHubMetadataService(unittest.TestCase):
                 ),
             ],
         )
-        svc.graph.get_aspect.return_value = schema
+        svc.graph.get_entities.return_value = {
+            dataset_urn: {"schemaMetadata": _aspect_tuple(schema)},
+        }
 
-        result = json.loads(svc.list_columns("urn:li:dataset:test"))
+        result = json.loads(svc.list_columns(dataset_urn))
         self.assertEqual(len(result), 1)
         cols = result[0]["columns"]
         self.assertEqual(len(cols), 2)
@@ -159,7 +155,7 @@ class TestDataHubMetadataService(unittest.TestCase):
 
     def test_list_columns_no_schema(self, MockGraph):
         svc = self._make_service(MockGraph)
-        svc.graph.get_aspect.return_value = None
+        svc.graph.get_entities.return_value = {}
 
         result = json.loads(svc.list_columns("urn:li:dataset:test"))
         self.assertIn("error", result[0])
@@ -182,12 +178,16 @@ class TestDataHubMetadataService(unittest.TestCase):
         props.statement = MagicMock()
         props.statement.value = "SELECT 1"
 
-        def mock_get_aspect(urn, aspect_cls):
-            if aspect_cls == GlobalTagsClass:
-                return draft_tags if urn == "urn:li:query:draft_q" else approved_tags
-            return props
-
-        svc.graph.get_aspect.side_effect = mock_get_aspect
+        svc.graph.get_entities.return_value = {
+            "urn:li:query:approved_q": {
+                "globalTags": _aspect_tuple(approved_tags),
+                "queryProperties": _aspect_tuple(props),
+            },
+            "urn:li:query:draft_q": {
+                "globalTags": _aspect_tuple(draft_tags),
+                "queryProperties": _aspect_tuple(props),
+            },
+        }
 
         result = json.loads(svc.get_sql_fragments("urn:li:dataset:test"))
         self.assertEqual(len(result), 1)
@@ -216,17 +216,20 @@ class TestDataHubMetadataService(unittest.TestCase):
         props.statement = MagicMock()
         props.statement.value = "SELECT * FROM t1"
 
-        def mock_get_aspect(urn, cls):
-            if cls == GlobalTagsClass:
-                if urn == "urn:li:query:template_approved":
-                    return template_approved
-                elif urn == "urn:li:query:template_draft":
-                    return template_draft
-                else:
-                    return no_template
-            return props
-
-        svc.graph.get_aspect.side_effect = mock_get_aspect
+        svc.graph.get_entities.return_value = {
+            "urn:li:query:template_approved": {
+                "globalTags": _aspect_tuple(template_approved),
+                "queryProperties": _aspect_tuple(props),
+            },
+            "urn:li:query:template_draft": {
+                "globalTags": _aspect_tuple(template_draft),
+                "queryProperties": _aspect_tuple(props),
+            },
+            "urn:li:query:not_template": {
+                "globalTags": _aspect_tuple(no_template),
+                "queryProperties": _aspect_tuple(props),
+            },
+        }
 
         result = json.loads(svc.get_query_templates())
         # Only template_approved should appear (not draft, not non-template)
@@ -249,12 +252,16 @@ class TestDataHubMetadataService(unittest.TestCase):
         info.name = "FY starts with feb"
         info.definition = "Fiscal year begins in February"
 
-        def mock_get_aspect(urn, cls):
-            if cls == GlobalTagsClass:
-                return draft_tags if "draft" in urn else no_tags
-            return info
-
-        svc.graph.get_aspect.side_effect = mock_get_aspect
+        svc.graph.get_entities.return_value = {
+            "urn:li:glossaryTerm:approved_term": {
+                "globalTags": _aspect_tuple(no_tags),
+                "glossaryTermInfo": _aspect_tuple(info),
+            },
+            "urn:li:glossaryTerm:draft_term": {
+                "globalTags": _aspect_tuple(draft_tags),
+                "glossaryTermInfo": _aspect_tuple(info),
+            },
+        }
 
         result = json.loads(svc.get_business_terms())
         self.assertEqual(len(result), 1)
