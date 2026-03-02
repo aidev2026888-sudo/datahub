@@ -36,21 +36,17 @@ class DataHubMetadataService:
         """
         List all tables (datasets), optionally filtered by database and/or schema.
 
-        Uses DataHub search with browse-path filters.
+        Uses the native platform filter, then filters by db/schema in Python
+        by parsing the qualified name from the URN.
         URN convention: urn:li:dataset:(urn:li:dataPlatform:<platform>,<db>.<schema>.<table>,<env>)
         """
-        # Build query parts
-        parts = []
-        if db_name:
-            parts.append(f"browsePaths:*{db_name}*")
-        if schema_name:
-            parts.append(f"browsePaths:*{schema_name}*")
-        query = " AND ".join(parts) if parts else "*"
-
-        urns = list(self.graph.get_urns_by_filter(entity_types=["dataset"], query=query))
+        urns = list(self.graph.get_urns_by_filter(
+            entity_types=["dataset"],
+            platform=platform,
+        ))
 
         output = []
-        for urn in urns[:50]:
+        for urn in urns[:200]:
             # Parse the dataset name from URN
             # e.g. urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)
             dataset_name = urn.split(",")[1] if "," in urn else urn
@@ -62,6 +58,12 @@ class DataHubMetadataService:
                 db, schema, table = "", name_parts[0], name_parts[1]
             else:
                 db, schema, table = "", "", dataset_name
+
+            # Filter by database and/or schema if requested
+            if db_name and db.lower() != db_name.lower():
+                continue
+            if schema_name and schema.lower() != schema_name.lower():
+                continue
 
             properties = self.graph.get_aspect(urn, "datasetProperties")
             desc = properties.description if properties else ""
