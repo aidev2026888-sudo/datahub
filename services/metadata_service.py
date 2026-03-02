@@ -11,9 +11,11 @@ Provides 5 methods mapped to the Agent's requirements:
 import json
 from datahub.ingestion.graph.client import DatahubClientConfig, DataHubGraph
 from datahub.metadata.schema_classes import (
+    DatasetPropertiesClass,
     SchemaMetadataClass,
     QueryPropertiesClass,
     GlossaryTermInfoClass,
+    GlobalTagsClass,
 )
 
 
@@ -65,7 +67,7 @@ class DataHubMetadataService:
             if schema_name and schema.lower() != schema_name.lower():
                 continue
 
-            properties = self.graph.get_aspect(urn, "datasetProperties")
+            properties = self.graph.get_aspect(urn, DatasetPropertiesClass)
             desc = properties.description if properties else ""
 
             output.append({
@@ -110,11 +112,18 @@ class DataHubMetadataService:
         Return SQL fragments (query entities) linked to a dataset.
         Excludes entities tagged 'Draft' to enforce approval workflow.
         """
-        query_str = f"subjects:{dataset_urn} AND -tags:Draft"
-        urns = list(self.graph.get_urns_by_filter(entity_types=["query"], query=query_str))
+        urns = list(self.graph.get_urns_by_filter(
+            entity_types=["query"],
+            query=f"*{dataset_urn}*",
+        ))
 
         output = []
         for urn in urns[:20]:
+            # Skip entities tagged Draft
+            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                continue
+
             props: QueryPropertiesClass | None = self.graph.get_aspect(
                 urn, QueryPropertiesClass
             )
@@ -135,11 +144,19 @@ class DataHubMetadataService:
         Return global query templates (tagged 'Template', excluding 'Draft').
         """
         urns = list(self.graph.get_urns_by_filter(
-            entity_types=["query"], query="tags:Template AND -tags:Draft"
+            entity_types=["query"],
         ))
 
         output = []
-        for urn in urns[:20]:
+        for urn in urns[:50]:
+            # Check tags: must have Template, must NOT have Draft
+            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+            tag_names = [t.tag for t in (tags.tags if tags else [])]
+            if "urn:li:tag:Template" not in tag_names:
+                continue
+            if "urn:li:tag:Draft" in tag_names:
+                continue
+
             props: QueryPropertiesClass | None = self.graph.get_aspect(
                 urn, QueryPropertiesClass
             )
@@ -158,11 +175,16 @@ class DataHubMetadataService:
         Return approved business glossary terms (excludes 'Draft').
         """
         urns = list(self.graph.get_urns_by_filter(
-            entity_types=["glossaryTerm"], query="-tags:Draft"
+            entity_types=["glossaryTerm"],
         ))
 
         output = []
         for urn in urns[:100]:
+            # Skip entities tagged Draft
+            tags: GlobalTagsClass | None = self.graph.get_aspect(urn, GlobalTagsClass)
+            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                continue
+
             info: GlossaryTermInfoClass | None = self.graph.get_aspect(
                 urn, GlossaryTermInfoClass
             )
