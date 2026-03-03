@@ -289,28 +289,22 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
 def ingest_business_terms(yaml_path: str, dry_run: bool = False):
     """
     Read business_terms.yaml and emit GlossaryTerm entities,
-    grouped under GlossaryNode (term group) and optionally linked
-    to a dataset.
+    grouped under GlossaryNode (term group) and linked to a dataset scope.
 
     YAML format expected:
         business_terms:
-          - term: "FY starts with feb"
-            group: "Finance"
+          - group: "Finance"
             scope:
               platform: postgres
               database: mydb
-          - term: "Default currency is CHF"
-            group: "Finance"
-            scope:
-              platform: postgres
-              database: mydb
-              schema: public
-              table: t1
+            terms:
+              - "FY starts with feb"
+              - "Default currency is CHF"
     """
     data = _load_yaml(yaml_path)
-    terms = data.get("business_terms", [])
+    entries = data.get("business_terms", [])
 
-    if not terms:
+    if not entries:
         print("No business terms found in YAML.")
         return
 
@@ -322,76 +316,71 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
 
     # --- Collect unique groups and create GlossaryNode entities ---
     created_nodes: set[str] = set()
-    for entry in terms:
-        if isinstance(entry, dict):
-            group = entry.get("group")
-            if group and group not in created_nodes:
-                node_slug = _slugify(group)
-                node_urn = f"urn:li:glossaryNode:{node_slug}"
-                node_info = GlossaryNodeInfoClass(
-                    definition=f"Term group: {group}",
-                    name=group,
-                )
-                mcps.append(MetadataChangeProposalWrapper(
-                    entityUrn=node_urn, aspect=node_info
-                ))
-                created_nodes.add(group)
+    for entry in entries:
+        group = entry.get("group")
+        if group and group not in created_nodes:
+            node_slug = _slugify(group)
+            node_urn = f"urn:li:glossaryNode:{node_slug}"
+            node_info = GlossaryNodeInfoClass(
+                definition=f"Term group: {group}",
+                name=group,
+            )
+            mcps.append(MetadataChangeProposalWrapper(
+                entityUrn=node_urn, aspect=node_info
+            ))
+            created_nodes.add(group)
 
-    # --- Create terms under their group ---
-    for entry in terms:
-        # Support both old flat format ("string") and new dict format
-        if isinstance(entry, str):
-            term_text = entry
-            scope = {}
-            group = None
-        else:
-            term_text = entry["term"]
-            scope = entry.get("scope", {})
-            group = entry.get("group")
+    # --- Create terms under their group + scope ---
+    total_terms = 0
+    for entry in entries:
+        group = entry.get("group")
+        scope = entry.get("scope", {})
+        term_list = entry.get("terms", [])
 
         scope_slug = _build_scope_slug(scope)
-        term_slug = _slugify(term_text)
-        term_urn = f"urn:li:glossaryTerm:{scope_slug}_{term_slug}"
+        dataset_urn = _build_dataset_urn(scope)
 
-        # Set parentNode if a group is specified
         parent_node_urn = None
         if group:
             parent_node_urn = f"urn:li:glossaryNode:{_slugify(group)}"
 
-        info = GlossaryTermInfoClass(
-            definition=term_text,
-            name=term_text,
-            termSource="EXTERNAL",
-            parentNode=parent_node_urn,
-        )
+        for term_text in term_list:
+            total_terms += 1
+            term_slug = _slugify(term_text)
+            term_urn = f"urn:li:glossaryTerm:{scope_slug}_{term_slug}"
 
-        mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=info))
-        mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=DRAFT_TAG))
-
-        # Associate term with the target dataset via GlossaryTerms aspect
-        dataset_urn = _build_dataset_urn(scope)
-        if dataset_urn:
-            glossary_terms_aspect = GlossaryTermsClass(
-                terms=[GlossaryTermAssociationClass(urn=term_urn)],
-                auditStamp=audit_stamp,
+            info = GlossaryTermInfoClass(
+                definition=term_text,
+                name=term_text,
+                termSource="EXTERNAL",
+                parentNode=parent_node_urn,
             )
-            mcps.append(MetadataChangeProposalWrapper(
-                entityUrn=dataset_urn, aspect=glossary_terms_aspect
-            ))
+
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=info))
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=DRAFT_TAG))
+
+            # Associate term with the target dataset
+            if dataset_urn:
+                glossary_terms_aspect = GlossaryTermsClass(
+                    terms=[GlossaryTermAssociationClass(urn=term_urn)],
+                    auditStamp=audit_stamp,
+                )
+                mcps.append(MetadataChangeProposalWrapper(
+                    entityUrn=dataset_urn, aspect=glossary_terms_aspect
+                ))
 
     if dry_run:
-        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(terms)} business term(s):")
+        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_terms} business term(s):")
         if created_nodes:
             print(f"  Glossary nodes: {', '.join(sorted(created_nodes))}")
-        for entry in terms:
-            if isinstance(entry, str):
-                print(f"  - {entry}  -> (global, no group)")
-            else:
-                dataset_urn = _build_dataset_urn(entry.get("scope", {})) or "(global)"
-                group = entry.get('group', '(none)')
-                print(f"  - {entry['term']}  -> {dataset_urn}  [group: {group}]")
+        for entry in entries:
+            group = entry.get("group", "(none)")
+            scope = entry.get("scope", {})
+            dataset_urn = _build_dataset_urn(scope) or "(global)"
+            for t in entry.get("terms", []):
+                print(f"  - {t}  -> {dataset_urn}  [group: {group}]")
         return
 
     for mcp in mcps:
         emitter.emit_mcp(mcp)
-    print(f"Ingested {len(terms)} business term(s) with Draft tag.")
+    print(f"Ingested {total_terms} business term(s) with Draft tag.")

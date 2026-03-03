@@ -1,13 +1,17 @@
 business_terms:
-  - term: "FY starts with feb"
-    group: "Finance"
+  - group: "Finance"
     scope:
       platform: postgres
       database: mydb
-  - term: "Default currency is CHF"
-    group: "Finance"
+    terms:
+      - "FY starts with feb"
+      - "Default currency is CHF"
+  - group: "Operations"
     scope:
       platform: postgres
       database: mydb
       schema: public
       table: t1
+    terms:
+      - "Cost type 1 is actual"
+      - "Cost type 2 is budget"
