@@ -37,9 +37,7 @@ class VersionHistoryService:
         for version in range(max_versions):
             try:
                 info: GlossaryTermInfoClass | None = self.graph.get_aspect(
-                    entity_urn=term_urn,
-                    aspect_type=GlossaryTermInfoClass,
-                    version=version,
+                    term_urn, GlossaryTermInfoClass, version,
                 )
                 if info:
                     history.append({
