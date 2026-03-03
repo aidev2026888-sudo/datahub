@@ -61,6 +61,7 @@ def _get_emitter() -> DatahubRestEmitter:
         gms_server=config.DATAHUB_GMS_SERVER,
         token=config.DATAHUB_TOKEN if config.DATAHUB_TOKEN else None,
         disable_ssl_verification=True,
+        openapi_ingestion=True,
     )
 
 
