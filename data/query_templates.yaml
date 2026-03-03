@@ -3,7 +3,17 @@ query_templates:
     parameterized_sql: |
       select * from t1
       where costtype = 1
+    scope:
+      platform: postgres
+      database: mydb
+      schema: public
+      table: t1
   - parameterized_intent: "total budget"
     parameterized_sql: |
       select * from t1
       where costtype = 2
+    scope:
+      platform: postgres
+      database: mydb
+      schema: public
+      table: t1

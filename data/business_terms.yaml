@@ -1,3 +1,11 @@
 business_terms:
-  - "FY starts with feb"
-  - "Default currency is CHF"
+  - term: "FY starts with feb"
+    scope:
+      platform: postgres
+      database: mydb
+  - term: "Default currency is CHF"
+    scope:
+      platform: postgres
+      database: mydb
+      schema: public
+      table: t1

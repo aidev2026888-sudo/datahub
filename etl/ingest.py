@@ -3,10 +3,12 @@ ETL Ingestion Module — reads YAML source files and emits metadata to DataHub.
 
 Supports three ingestion types:
   1. Tables & columns (SchemaMetadata + DatasetProperties)
-  2. Query templates (QueryProperties + Template tag)
-  3. Business terms (GlossaryTermInfo)
+  2. Query templates (QueryProperties + QuerySubjects + Template tag)
+  3. Business terms (GlossaryTermInfo + GlossaryTerms on target entity)
 
 All entities are tagged with 'Draft' upon ingestion to support human-approval workflow.
+Scope (platform/database/schema/table) determines which dataset a query or term
+is attached to.
 """
 import re
 import time
@@ -23,9 +25,13 @@ from datahub.metadata.schema_classes import (
     GlobalTagsClass,
     TagAssociationClass,
     GlossaryTermInfoClass,
+    GlossaryTermsClass,
+    GlossaryTermAssociationClass,
     QueryPropertiesClass,
     QueryLanguageClass,
     QueryStatementClass,
+    QuerySubjectsClass,
+    QuerySubjectClass,
     AuditStampClass,
     OtherSchemaClass,
 )
@@ -74,6 +80,41 @@ def _map_col_type(col_type: str):
     if col_type.lower() in numeric_types:
         return SchemaFieldDataTypeClass(type=NumberTypeClass())
     return SchemaFieldDataTypeClass(type=StringTypeClass())
+
+
+def _build_dataset_urn(scope: dict) -> str | None:
+    """
+    Build a dataset URN from a scope dict.
+
+    scope keys: platform, database, schema, table, env (optional).
+    At minimum, platform + one of (database, schema, table) must be present.
+    Returns None if scope is missing or insufficient.
+    """
+    if not scope:
+        return None
+
+    platform = scope.get("platform", config.DEFAULT_PLATFORM)
+    env = scope.get("env", config.DEFAULT_ENV)
+    db = scope.get("database", "")
+    schema = scope.get("schema", "")
+    table = scope.get("table", "")
+
+    name_parts = [p for p in [db, schema, table] if p]
+    if not name_parts:
+        return None
+
+    qualified_name = ".".join(name_parts)
+    return f"urn:li:dataset:(urn:li:dataPlatform:{platform},{qualified_name},{env})"
+
+
+def _build_scope_slug(scope: dict) -> str:
+    """Build a slug prefix from scope for unique URN generation."""
+    parts = []
+    for key in ("database", "schema", "table"):
+        val = scope.get(key, "")
+        if val:
+            parts.append(val)
+    return "_".join(parts) if parts else "global"
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +176,7 @@ def ingest_tables(
             )
             fields.append(field)
 
-        schema = SchemaMetadataClass(
+        schema_obj = SchemaMetadataClass(
             schemaName=table_name,
             platform=f"urn:li:dataPlatform:{platform}",
             version=0,
@@ -150,7 +191,7 @@ def ingest_tables(
             description=f"Table {table_name} ingested from YAML.",
         )
 
-        mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=schema))
+        mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=schema_obj))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=props))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=DRAFT_TAG))
 
@@ -166,18 +207,23 @@ def ingest_tables(
 
 
 # ---------------------------------------------------------------------------
-# 2. Ingest query templates
+# 2. Ingest query templates (scoped to dataset)
 # ---------------------------------------------------------------------------
 
 def ingest_query_templates(yaml_path: str, dry_run: bool = False):
     """
-    Read query_templates.yaml and emit Query entities.
+    Read query_templates.yaml and emit Query entities linked to a dataset.
 
     YAML format expected:
         query_templates:
           - parameterized_intent: "total cost"
             parameterized_sql: |
               select * from t1 where costtype = 1
+            scope:
+              platform: postgres
+              database: mydb
+              schema: public
+              table: t1
     """
     data = _load_yaml(yaml_path)
     templates = data.get("query_templates", [])
@@ -192,8 +238,12 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
     for tmpl in templates:
         intent = tmpl["parameterized_intent"]
         sql = tmpl["parameterized_sql"].strip()
-        slug = _slugify(intent)
-        query_urn = f"urn:li:query:{slug}"
+        scope = tmpl.get("scope", {})
+
+        # Build a scoped slug for a unique query URN
+        scope_slug = _build_scope_slug(scope)
+        intent_slug = _slugify(intent)
+        query_urn = f"urn:li:query:{scope_slug}_{intent_slug}"
 
         now_ms = int(time.time() * 1000)
         audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
@@ -210,10 +260,20 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
         mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=props))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=TEMPLATE_AND_DRAFT_TAGS))
 
+        # Link query to the dataset via QuerySubjects
+        dataset_urn = _build_dataset_urn(scope)
+        if dataset_urn:
+            subjects = QuerySubjectsClass(
+                subjects=[QuerySubjectClass(entity=dataset_urn)]
+            )
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=subjects))
+
     if dry_run:
         print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(templates)} query template(s):")
         for t in templates:
-            print(f"  - {t['parameterized_intent']}")
+            scope = t.get("scope", {})
+            dataset_urn = _build_dataset_urn(scope) or "(global)"
+            print(f"  - {t['parameterized_intent']}  -> {dataset_urn}")
         return
 
     for mcp in mcps:
@@ -222,17 +282,26 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# 3. Ingest business terms
+# 3. Ingest business terms (scoped to dataset)
 # ---------------------------------------------------------------------------
 
 def ingest_business_terms(yaml_path: str, dry_run: bool = False):
     """
-    Read business_terms.yaml and emit GlossaryTerm entities.
+    Read business_terms.yaml and emit GlossaryTerm entities,
+    optionally linked to a dataset.
 
     YAML format expected:
         business_terms:
-          - "FY starts with feb"
-          - "Default currency is CHF"
+          - term: "FY starts with feb"
+            scope:
+              platform: postgres
+              database: mydb
+          - term: "Default currency is CHF"
+            scope:
+              platform: postgres
+              database: mydb
+              schema: public
+              table: t1
     """
     data = _load_yaml(yaml_path)
     terms = data.get("business_terms", [])
@@ -244,9 +313,21 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
     emitter = None if dry_run else _get_emitter()
     mcps: list[MetadataChangeProposalWrapper] = []
 
-    for term_text in terms:
-        slug = _slugify(term_text)
-        term_urn = f"urn:li:glossaryTerm:{slug}"
+    now_ms = int(time.time() * 1000)
+    audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
+
+    for entry in terms:
+        # Support both old flat format ("string") and new dict format
+        if isinstance(entry, str):
+            term_text = entry
+            scope = {}
+        else:
+            term_text = entry["term"]
+            scope = entry.get("scope", {})
+
+        scope_slug = _build_scope_slug(scope)
+        term_slug = _slugify(term_text)
+        term_urn = f"urn:li:glossaryTerm:{scope_slug}_{term_slug}"
 
         info = GlossaryTermInfoClass(
             definition=term_text,
@@ -257,10 +338,25 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
         mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=info))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=DRAFT_TAG))
 
+        # Associate term with the target dataset via GlossaryTerms aspect
+        dataset_urn = _build_dataset_urn(scope)
+        if dataset_urn:
+            glossary_terms_aspect = GlossaryTermsClass(
+                terms=[GlossaryTermAssociationClass(urn=term_urn)],
+                auditStamp=audit_stamp,
+            )
+            mcps.append(MetadataChangeProposalWrapper(
+                entityUrn=dataset_urn, aspect=glossary_terms_aspect
+            ))
+
     if dry_run:
         print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(terms)} business term(s):")
-        for t in terms:
-            print(f"  - {t}")
+        for entry in terms:
+            if isinstance(entry, str):
+                print(f"  - {entry}  -> (global)")
+            else:
+                dataset_urn = _build_dataset_urn(entry.get("scope", {})) or "(global)"
+                print(f"  - {entry['term']}  -> {dataset_urn}")
         return
 
     for mcp in mcps:
