@@ -35,6 +35,7 @@ from datahub.metadata.schema_classes import (
     QuerySubjectClass,
     AuditStampClass,
     OtherSchemaClass,
+    TagPropertiesClass,
 )
 
 import config
@@ -53,6 +54,21 @@ TEMPLATE_AND_DRAFT_TAGS = GlobalTagsClass(
         TagAssociationClass(tag="urn:li:tag:Draft"),
     ]
 )
+
+# Tag URNs used across all ingestion functions
+DRAFT_TAG_URN = "urn:li:tag:Draft"
+TEMPLATE_TAG_URN = "urn:li:tag:Template"
+
+
+def _ensure_tags(emitter: DatahubRestEmitter) -> None:
+    """Create the Draft and Template tag entities if they don't already exist."""
+    for tag_urn, name, color in [
+        (DRAFT_TAG_URN, "Draft", "#FFA500"),
+        (TEMPLATE_TAG_URN, "Template", "#0088FF"),
+    ]:
+        props = TagPropertiesClass(name=name, description=f"Auto-created tag: {name}", colorHex=color)
+        mcp = MetadataChangeProposalWrapper(entityUrn=tag_urn, aspect=props)
+        emitter.emit_mcp(mcp)
 
 
 def _get_emitter() -> DatahubRestEmitter:
@@ -155,6 +171,8 @@ def ingest_tables(
         return
 
     emitter = None if dry_run else _get_emitter()
+    if emitter:
+        _ensure_tags(emitter)
     mcps: list[MetadataChangeProposalWrapper] = []
 
     for table in tables:
@@ -235,6 +253,8 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
         return
 
     emitter = None if dry_run else _get_emitter()
+    if emitter:
+        _ensure_tags(emitter)
     mcps: list[MetadataChangeProposalWrapper] = []
 
     for tmpl in templates:
@@ -310,6 +330,8 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
         return
 
     emitter = None if dry_run else _get_emitter()
+    if emitter:
+        _ensure_tags(emitter)
     mcps: list[MetadataChangeProposalWrapper] = []
 
     now_ms = int(time.time() * 1000)
