@@ -232,23 +232,27 @@ def ingest_tables(
 
 def ingest_query_templates(yaml_path: str, dry_run: bool = False):
     """
-    Read query_templates.yaml and emit Query entities linked to a dataset.
+    Read query_templates.yaml and emit Query entities linked to a dataset scope.
 
     YAML format expected:
         query_templates:
-          - parameterized_intent: "total cost"
-            parameterized_sql: |
-              select * from t1 where costtype = 1
-            scope:
+          - scope:
               platform: postgres
               database: mydb
               schema: public
               table: t1
+            queries:
+              - parameterized_intent: "total cost"
+                parameterized_sql: |
+                  select * from t1 where costtype = 1
+              - parameterized_intent: "total budget"
+                parameterized_sql: |
+                  select * from t1 where costtype = 2
     """
     data = _load_yaml(yaml_path)
-    templates = data.get("query_templates", [])
+    entries = data.get("query_templates", [])
 
-    if not templates:
+    if not entries:
         print("No query templates found in YAML.")
         return
 
@@ -257,50 +261,58 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
         _ensure_tags(emitter)
     mcps: list[MetadataChangeProposalWrapper] = []
 
-    for tmpl in templates:
-        intent = tmpl["parameterized_intent"]
-        sql = tmpl["parameterized_sql"].strip()
-        scope = tmpl.get("scope", {})
+    now_ms = int(time.time() * 1000)
+    audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
 
-        # Build a scoped slug for a unique query URN
+    total_queries = 0
+
+    for entry in entries:
+        scope = entry.get("scope", {})
+        query_list = entry.get("queries", [])
+        
         scope_slug = _build_scope_slug(scope)
-        intent_slug = _slugify(intent)
-        query_urn = f"urn:li:query:{scope_slug}_{intent_slug}"
-
-        now_ms = int(time.time() * 1000)
-        audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
-
-        props = QueryPropertiesClass(
-            statement=QueryStatementClass(value=sql, language=QueryLanguageClass.SQL),
-            source="MANUAL",
-            created=audit_stamp,
-            lastModified=audit_stamp,
-            name=intent,
-            description=intent,
-        )
-
-        mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=props))
-        mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=TEMPLATE_AND_DRAFT_TAGS))
-
-        # Link query to the dataset via QuerySubjects
         dataset_urn = _build_dataset_urn(scope)
-        if dataset_urn:
-            subjects = QuerySubjectsClass(
-                subjects=[QuerySubjectClass(entity=dataset_urn)]
+
+        for tmpl in query_list:
+            total_queries += 1
+            intent = tmpl["parameterized_intent"]
+            sql = tmpl["parameterized_sql"].strip()
+
+            # Build a scoped slug for a unique query URN
+            intent_slug = _slugify(intent)
+            query_urn = f"urn:li:query:{scope_slug}_{intent_slug}"
+
+            props = QueryPropertiesClass(
+                statement=QueryStatementClass(value=sql, language=QueryLanguageClass.SQL),
+                source="MANUAL",
+                created=audit_stamp,
+                lastModified=audit_stamp,
+                name=intent,
+                description=intent,
             )
-            mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=subjects))
+
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=props))
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=TEMPLATE_AND_DRAFT_TAGS))
+
+            # Link query to the dataset via QuerySubjects
+            if dataset_urn:
+                subjects = QuerySubjectsClass(
+                    subjects=[QuerySubjectClass(entity=dataset_urn)]
+                )
+                mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=subjects))
 
     if dry_run:
-        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(templates)} query template(s):")
-        for t in templates:
-            scope = t.get("scope", {})
+        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_queries} query template(s):")
+        for entry in entries:
+            scope = entry.get("scope", {})
             dataset_urn = _build_dataset_urn(scope) or "(global)"
-            print(f"  - {t['parameterized_intent']}  -> {dataset_urn}")
+            for t in entry.get("queries", []):
+                print(f"  - {t['parameterized_intent']}  -> {dataset_urn}")
         return
 
     for mcp in mcps:
         emitter.emit_mcp(mcp)
-    print(f"Ingested {len(templates)} query template(s) with Draft + Template tags.")
+    print(f"Ingested {total_queries} query template(s) with Draft + Template tags.")
 
 
 # ---------------------------------------------------------------------------

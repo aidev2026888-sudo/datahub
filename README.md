@@ -51,18 +51,22 @@ tables:
 ```
 
 ### `query_templates.yaml`
-Query templates are scoped to a dataset via `scope`. The scope determines which dataset the query is linked to via `QuerySubjects`.
+Query templates are grouped by scope. The scope determines which dataset the queries are linked to via `QuerySubjects`.
 
 ```yaml
 query_templates:
-  - parameterized_intent: "total cost"
-    parameterized_sql: |
-      select * from t1 where costtype = 1
-    scope:
+  - scope:
       platform: postgres
       database: mydb
       schema: public
       table: t1
+    queries:
+      - parameterized_intent: "total cost"
+        parameterized_sql: |
+          select * from t1 where costtype = 1
+      - parameterized_intent: "total budget"
+        parameterized_sql: |
+          select * from t1 where costtype = 2
 ```
 
 ### `business_terms.yaml`
