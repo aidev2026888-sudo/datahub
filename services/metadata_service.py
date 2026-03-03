@@ -74,21 +74,39 @@ class DataHubMetadataService:
         platform: str,
         db_name: str | None = None,
         schema_name: str | None = None,
+        include_draft: bool = False,
     ) -> str:
         """
         List all tables (datasets), optionally filtered by database and/or schema.
 
         Uses the native platform filter, then filters by db/schema in Python
         by parsing the qualified name from the URN.
+        Excludes datasets tagged 'Draft' by default.
         URN convention: urn:li:dataset:(urn:li:dataPlatform:<platform>,<db>.<schema>.<table>,<env>)
         """
         urns = list(self.graph.get_urns_by_filter(
             entity_types=["dataset"],
             platform=platform,
         ))
+        urns = urns[:200]
+
+        if not include_draft:
+            # Batch-fetch globalTags to filter out Draft entities
+            aspects = self._fetch_entity_aspects(
+                entity_name="dataset",
+                urns=urns,
+                aspect_names=["globalTags"],
+            )
+            filtered_urns = []
+            for urn in urns:
+                tags: GlobalTagsClass | None = aspects.get(urn, {}).get("globalTags")
+                if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                    continue
+                filtered_urns.append(urn)
+            urns = filtered_urns
 
         output = []
-        for urn in urns[:200]:
+        for urn in urns:
             # Parse the dataset name from URN
             # e.g. urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.users,PROD)
             dataset_name = urn.split(",")[1] if "," in urn else urn
@@ -118,17 +136,25 @@ class DataHubMetadataService:
     # ------------------------------------------------------------------
     # 2. List columns
     # ------------------------------------------------------------------
-    def list_columns(self, dataset_urn: str) -> str:
+    def list_columns(self, dataset_urn: str, include_draft: bool = False) -> str:
         """
         List columns (schema fields) for a given dataset URN.
+        Excludes datasets tagged 'Draft' by default.
         """
         aspects = self._fetch_entity_aspects(
             entity_name="dataset",
             urns=[dataset_urn],
-            aspect_names=["schemaMetadata"],
+            aspect_names=["schemaMetadata", "globalTags"],
         )
 
-        schema = aspects.get(dataset_urn, {}).get("schemaMetadata")
+        entity = aspects.get(dataset_urn, {})
+        tags: GlobalTagsClass | None = entity.get("globalTags")
+
+        if not include_draft:
+            if tags and any(t.tag == "urn:li:tag:Draft" for t in (tags.tags or [])):
+                return json.dumps([{"error": f"Dataset {dataset_urn} is currently in Draft state and must be approved."}])
+
+        schema = entity.get("schemaMetadata")
         if not isinstance(schema, SchemaMetadataClass):
             return json.dumps([{"error": f"No schema found for dataset {dataset_urn}."}])
 

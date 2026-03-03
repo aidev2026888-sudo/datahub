@@ -116,7 +116,7 @@ python main.py term-history     --urn "urn:li:glossaryTerm:mydb_fy_starts_with_f
 1. ETL pipeline ingests metadata → entities get a **`Draft`** tag
 2. Data steward searches for `Draft` in DataHub UI
 3. Steward reviews, removes `Draft`, adds **`Approved`** tag
-4. Fetch commands automatically **exclude** `Draft` entities — only approved data is returned
+4. All fetch commands (`list-tables`, `list-columns`, `sql-fragments`, etc.) automatically **exclude** `Draft` entities — only approved data is returned
 
 ## How Scoping Works
 

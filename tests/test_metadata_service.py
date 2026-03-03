@@ -105,15 +105,28 @@ class TestDataHubMetadataService(unittest.TestCase):
         self.assertEqual(result[0]["schema"], "")
         self.assertEqual(result[0]["table"], "users")
 
-    def test_list_tables_does_not_call_get_entities(self, MockGraph):
-        """list_tables should not call get_entities (no aspect fetch needed)."""
+    def test_list_tables_excludes_draft(self, MockGraph):
         svc = self._make_service(MockGraph)
         svc.graph.get_urns_by_filter.return_value = [
-            "urn:li:dataset:(urn:li:dataPlatform:postgres,db.public.t1,PROD)",
+            "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.approved,PROD)",
+            "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.draft,PROD)",
         ]
 
-        svc.list_tables("postgres")
-        svc.graph.get_entities.assert_not_called()
+        draft_tags = GlobalTagsClass(tags=[TagAssociationClass(tag="urn:li:tag:Draft")])
+        no_tags = GlobalTagsClass(tags=[])
+
+        svc.graph.get_entities.return_value = {
+            "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.approved,PROD)": {
+                "globalTags": _aspect_tuple(no_tags),
+            },
+            "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.draft,PROD)": {
+                "globalTags": _aspect_tuple(draft_tags),
+            },
+        }
+
+        result = json.loads(svc.list_tables("postgres"))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["table"], "approved")
 
     # ---------------------------------------------------------------
     # 2. list_columns
@@ -142,8 +155,12 @@ class TestDataHubMetadataService(unittest.TestCase):
                 ),
             ],
         )
+        no_tags = GlobalTagsClass(tags=[])
         svc.graph.get_entities.return_value = {
-            dataset_urn: {"schemaMetadata": _aspect_tuple(schema)},
+            dataset_urn: {
+                "schemaMetadata": _aspect_tuple(schema),
+                "globalTags": _aspect_tuple(no_tags),
+            },
         }
 
         result = json.loads(svc.list_columns(dataset_urn))
@@ -159,6 +176,21 @@ class TestDataHubMetadataService(unittest.TestCase):
 
         result = json.loads(svc.list_columns("urn:li:dataset:test"))
         self.assertIn("error", result[0])
+
+    def test_list_columns_excludes_draft(self, MockGraph):
+        svc = self._make_service(MockGraph)
+        dataset_urn = "urn:li:dataset:(urn:li:dataPlatform:postgres,mydb.public.draft,PROD)"
+        draft_tags = GlobalTagsClass(tags=[TagAssociationClass(tag="urn:li:tag:Draft")])
+        svc.graph.get_entities.return_value = {
+            dataset_urn: {
+                "globalTags": _aspect_tuple(draft_tags),
+            },
+        }
+
+        result = json.loads(svc.list_columns(dataset_urn))
+        self.assertEqual(len(result), 1)
+        self.assertIn("error", result[0])
+        self.assertIn("Draft state", result[0]["error"])
 
     # ---------------------------------------------------------------
     # 3. get_sql_fragments — Draft filtering
