@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 DataHub Metadata Service — fetches metadata from a DataHub instance.
 
@@ -126,9 +127,9 @@ class DataHubMetadataService:
                 continue
 
             output.append({
+                "TABLE_NAME": table,
                 "database": db,
                 "schema": schema,
-                "table": table,
                 "urn": urn,
             })
         return json.dumps(output, indent=2)
@@ -161,9 +162,9 @@ class DataHubMetadataService:
         columns = []
         for field in schema.fields:
             columns.append({
-                "name": field.fieldPath,
-                "col_type": field.nativeDataType,
-                "description": field.description or "",
+                "NAME": field.fieldPath,
+                "COL_TYPE": field.nativeDataType,
+                "DESCRIPTION": field.description or "",
             })
 
         return json.dumps([{"urn": dataset_urn, "columns": columns}], indent=2)
@@ -201,10 +202,9 @@ class DataHubMetadataService:
 
             if props:
                 output.append({
-                    "name": props.name,
+                    "parameterized_intent": props.description,
+                    "parameterized_sql": props.statement.value if props.statement else "",
                     "table_scope": dataset_urn,
-                    "intent": props.description,
-                    "sql_fragment": props.statement.value if props.statement else "",
                 })
         return json.dumps(output, indent=2)
 
@@ -278,6 +278,9 @@ class DataHubMetadataService:
 
             if info:
                 name = info.name or urn.split(":")[-1]
-                output.append(f"TERM: {name}\nDEFINITION: {info.definition}")
+                output.append({
+                    "term": name,
+                    "definition": info.definition,
+                })
 
         return json.dumps(output, indent=2)

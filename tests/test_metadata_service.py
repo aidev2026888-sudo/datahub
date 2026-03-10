@@ -58,7 +58,7 @@ class TestDataHubMetadataService(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["database"], "mydb")
         self.assertEqual(result[0]["schema"], "public")
-        self.assertEqual(result[0]["table"], "users")
+        self.assertEqual(result[0]["TABLE_NAME"], "users")
 
     def test_list_tables_filters_by_db(self, MockGraph):
         svc = self._make_service(MockGraph)
@@ -81,7 +81,7 @@ class TestDataHubMetadataService(unittest.TestCase):
         result = json.loads(svc.list_tables("postgres", schema_name="analytics"))
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["schema"], "analytics")
-        self.assertEqual(result[0]["table"], "t2")
+        self.assertEqual(result[0]["TABLE_NAME"], "t2")
 
     def test_list_tables_2_part_name(self, MockGraph):
         svc = self._make_service(MockGraph)
@@ -92,7 +92,7 @@ class TestDataHubMetadataService(unittest.TestCase):
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(result[0]["database"], "")
         self.assertEqual(result[0]["schema"], "public")
-        self.assertEqual(result[0]["table"], "users")
+        self.assertEqual(result[0]["TABLE_NAME"], "users")
 
     def test_list_tables_1_part_name(self, MockGraph):
         svc = self._make_service(MockGraph)
@@ -103,7 +103,7 @@ class TestDataHubMetadataService(unittest.TestCase):
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(result[0]["database"], "")
         self.assertEqual(result[0]["schema"], "")
-        self.assertEqual(result[0]["table"], "users")
+        self.assertEqual(result[0]["TABLE_NAME"], "users")
 
     def test_list_tables_excludes_draft(self, MockGraph):
         svc = self._make_service(MockGraph)
@@ -126,7 +126,7 @@ class TestDataHubMetadataService(unittest.TestCase):
 
         result = json.loads(svc.list_tables("postgres"))
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["table"], "approved")
+        self.assertEqual(result[0]["TABLE_NAME"], "approved")
 
     # ---------------------------------------------------------------
     # 2. list_columns
@@ -167,8 +167,8 @@ class TestDataHubMetadataService(unittest.TestCase):
         self.assertEqual(len(result), 1)
         cols = result[0]["columns"]
         self.assertEqual(len(cols), 2)
-        self.assertEqual(cols[0]["name"], "id")
-        self.assertEqual(cols[0]["col_type"], "bigint")
+        self.assertEqual(cols[0]["NAME"], "id")
+        self.assertEqual(cols[0]["COL_TYPE"], "bigint")
 
     def test_list_columns_no_schema(self, MockGraph):
         svc = self._make_service(MockGraph)
@@ -223,7 +223,7 @@ class TestDataHubMetadataService(unittest.TestCase):
 
         result = json.loads(svc.get_sql_fragments("urn:li:dataset:test"))
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["sql_fragment"], "SELECT 1")
+        self.assertEqual(result[0]["parameterized_sql"], "SELECT 1")
 
     # ---------------------------------------------------------------
     # 4. get_query_templates — Template + Draft filtering
@@ -297,7 +297,7 @@ class TestDataHubMetadataService(unittest.TestCase):
 
         result = json.loads(svc.get_business_terms())
         self.assertEqual(len(result), 1)
-        self.assertIn("FY starts with feb", result[0])
+        self.assertEqual(result[0]["term"], "FY starts with feb")
 
 
 if __name__ == "__main__":
