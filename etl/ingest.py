@@ -12,6 +12,7 @@ is attached to.
 """
 import re
 import time
+from datetime import datetime, timezone
 import yaml
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
 from datahub.emitter.rest_emitter import DatahubRestEmitter
@@ -36,6 +37,8 @@ from datahub.metadata.schema_classes import (
     AuditStampClass,
     OtherSchemaClass,
     TagPropertiesClass,
+    VersionPropertiesClass,
+    VersionSetPropertiesClass,
 )
 
 import config
@@ -135,6 +138,51 @@ def _build_scope_slug(scope: dict) -> str:
     return "_".join(parts) if parts else "global"
 
 
+def _generate_version_label() -> str:
+    """Create a timestamp-based version label, e.g. 'v_20260311_232800'."""
+    return datetime.now(timezone.utc).strftime("v_%Y%m%d_%H%M%S")
+
+
+def _version_mcps(
+    entity_urn: str,
+    version_set_id: str,
+    entity_type: str,
+    version_label: str,
+) -> list[MetadataChangeProposalWrapper]:
+    """
+    Emit MCPs to link an entity to a VersionSet.
+
+    Creates the VersionSet (if needed) and attaches VersionProperties
+    to the entity.
+
+    Args:
+        entity_urn: URN of the versioned entity.
+        version_set_id: Unique ID for the VersionSet.
+        entity_type: DataHub entity type (e.g. 'dataset', 'query', 'glossaryTerm').
+        version_label: Human-readable version label (e.g. 'v_20260311_232800').
+    """
+    version_set_urn = f"urn:li:versionSet:({version_set_id},{entity_type})"
+
+    # Create / update the VersionSet entity
+    vs_props = VersionSetPropertiesClass(
+        versioningScheme="ALPHANUMERIC_GENERATED_BY_DATAHUB",
+    )
+    vs_mcp = MetadataChangeProposalWrapper(
+        entityUrn=version_set_urn, aspect=vs_props,
+    )
+
+    # Attach VersionProperties to the entity
+    v_props = VersionPropertiesClass(
+        versionSet=version_set_urn,
+        version={"versionTag": version_label},
+    )
+    v_mcp = MetadataChangeProposalWrapper(
+        entityUrn=entity_urn, aspect=v_props,
+    )
+
+    return [vs_mcp, v_mcp]
+
+
 # ---------------------------------------------------------------------------
 # 1. Ingest tables & columns
 # ---------------------------------------------------------------------------
@@ -148,11 +196,13 @@ def ingest_tables(
     dry_run: bool = False,
 ):
     """
-    Read tables.yaml and emit Dataset entities with SchemaMetadata.
+    Read table_cols.yaml and emit Dataset entities with SchemaMetadata.
 
     YAML format expected:
         tables:
           - TABLE_NAME: t1
+            TABLE_TYPE: "denormalized"
+            DESCRIPTION: "this is a test table"
             COLUMNS:
               - NAME: col1
                 COL_TYPE: bigint
@@ -174,6 +224,8 @@ def ingest_tables(
     if emitter:
         _ensure_tags(emitter)
     mcps: list[MetadataChangeProposalWrapper] = []
+
+    version_label = _generate_version_label()
 
     for table in tables:
         table_name = table["TABLE_NAME"]
@@ -206,24 +258,43 @@ def ingest_tables(
         )
 
         # --- Dataset properties (description, custom props) ---
+        table_description = table.get("DESCRIPTION", f"Table {table_name} ingested from YAML.")
+        table_type = table.get("TABLE_TYPE", "")
+
+        custom_props = {}
+        if table_type:
+            custom_props["TABLE_TYPE"] = table_type
+
         props = DatasetPropertiesClass(
             name=table_name,
-            description=f"Table {table_name} ingested from YAML.",
+            description=table_description,
+            customProperties=custom_props if custom_props else None,
         )
 
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=schema_obj))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=props))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=DRAFT_TAG))
 
+        # --- Link to VersionSet ---
+        mcps.extend(_version_mcps(
+            entity_urn=dataset_urn,
+            version_set_id=qualified_name,
+            entity_type="dataset",
+            version_label=version_label,
+        ))
+
     if dry_run:
-        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(tables)} table(s):")
+        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {len(tables)} table(s) (version={version_label}):")
         for t in tables:
-            print(f"  - {t['TABLE_NAME']}  ({len(t.get('COLUMNS', []))} columns)")
+            table_type = t.get('TABLE_TYPE', '')
+            desc = t.get('DESCRIPTION', '')
+            type_str = f"  type={table_type}" if table_type else ""
+            print(f"  - {t['TABLE_NAME']}  ({len(t.get('COLUMNS', []))} columns){type_str}")
         return
 
     for mcp in mcps:
         emitter.emit_mcp(mcp)
-    print(f"Ingested {len(tables)} table(s) with Draft tag.")
+    print(f"Ingested {len(tables)} table(s) with Draft tag (version={version_label}).")
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +335,7 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
     now_ms = int(time.time() * 1000)
     audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
 
+    version_label = _generate_version_label()
     total_queries = 0
 
     for entry in entries:
@@ -301,8 +373,16 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
                 )
                 mcps.append(MetadataChangeProposalWrapper(entityUrn=query_urn, aspect=subjects))
 
+            # --- Link to VersionSet ---
+            mcps.extend(_version_mcps(
+                entity_urn=query_urn,
+                version_set_id=f"{scope_slug}_{intent_slug}",
+                entity_type="query",
+                version_label=version_label,
+            ))
+
     if dry_run:
-        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_queries} query template(s):")
+        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_queries} query template(s) (version={version_label}):")
         for entry in entries:
             scope = entry.get("scope", {})
             dataset_urn = _build_dataset_urn(scope) or "(global)"
@@ -312,7 +392,7 @@ def ingest_query_templates(yaml_path: str, dry_run: bool = False):
 
     for mcp in mcps:
         emitter.emit_mcp(mcp)
-    print(f"Ingested {total_queries} query template(s) with Draft + Template tags.")
+    print(f"Ingested {total_queries} query template(s) with Draft + Template tags (version={version_label}).")
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +428,8 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
 
     now_ms = int(time.time() * 1000)
     audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
+
+    version_label = _generate_version_label()
 
     # --- Collect unique groups and create GlossaryNode entities ---
     created_nodes: set[str] = set()
@@ -394,6 +476,14 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
             mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=info))
             mcps.append(MetadataChangeProposalWrapper(entityUrn=term_urn, aspect=DRAFT_TAG))
 
+            # --- Link to VersionSet ---
+            mcps.extend(_version_mcps(
+                entity_urn=term_urn,
+                version_set_id=f"{scope_slug}_{term_slug}",
+                entity_type="glossaryTerm",
+                version_label=version_label,
+            ))
+
             # Associate term with the target dataset
             if dataset_urn:
                 glossary_terms_aspect = GlossaryTermsClass(
@@ -405,7 +495,7 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
                 ))
 
     if dry_run:
-        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_terms} business term(s):")
+        print(f"[DRY RUN] Would emit {len(mcps)} MCPs for {total_terms} business term(s) (version={version_label}):")
         if created_nodes:
             print(f"  Glossary nodes: {', '.join(sorted(created_nodes))}")
         for entry in entries:
@@ -418,4 +508,5 @@ def ingest_business_terms(yaml_path: str, dry_run: bool = False):
 
     for mcp in mcps:
         emitter.emit_mcp(mcp)
-    print(f"Ingested {total_terms} business term(s) with Draft tag.")
+    print(f"Ingested {total_terms} business term(s) with Draft tag (version={version_label}).")
+

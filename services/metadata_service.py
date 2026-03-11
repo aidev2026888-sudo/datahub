@@ -7,11 +7,17 @@ Provides 5 methods mapped to the Agent's requirements:
   2. list_columns     — get schema fields for a dataset
   3. get_sql_fragments — queries linked to a dataset (excluding Draft)
   4. get_query_templates — global templates tagged 'Template'
-  5. get_business_terms — glossary terms (excluding Draft)
+  5. get_business_terms — glossary terms (excluding Draft, optionally filtered by group)
+
+Approval workflow:
+  - All entities ingested via ETL are tagged 'Draft' and linked to a VersionSet.
+  - Human approves in the DataHub UI by removing the 'Draft' tag.
+  - Fetch methods exclude Draft entities, effectively returning only approved versions.
 
 All aspect fetching uses DataHubGraph.get_entities() (OpenAPI v3 batchGet)
 instead of the legacy get_aspect() REST call.
 """
+import re
 import json
 from typing import Any
 from datahub.ingestion.graph.client import DatahubClientConfig, DataHubGraph
@@ -21,6 +27,7 @@ from datahub.metadata.schema_classes import (
     QueryPropertiesClass,
     GlossaryTermInfoClass,
     GlobalTagsClass,
+    VersionPropertiesClass,
 )
 
 
@@ -30,6 +37,11 @@ class DataHubMetadataService:
     def __init__(self, server: str, token: str | None = None):
         cfg = DatahubClientConfig(server=server, token=token, disable_ssl_verification=True)
         self.graph = DataHubGraph(cfg)
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """Turn a human-readable name into a URL-safe slug for URNs."""
+        return re.sub(r"[^a-zA-Z0-9_.]", "_", name.strip()).lower()
 
     # ------------------------------------------------------------------
     # Helper: fetch aspects for one or more entities via OpenAPI v3
@@ -92,11 +104,11 @@ class DataHubMetadataService:
         urns = urns[:200]
 
         if not include_draft:
-            # Batch-fetch globalTags to filter out Draft entities
+            # Batch-fetch globalTags + versionProperties + datasetProperties
             aspects = self._fetch_entity_aspects(
                 entity_name="dataset",
                 urns=urns,
-                aspect_names=["globalTags"],
+                aspect_names=["globalTags", "versionProperties", "datasetProperties"],
             )
             filtered_urns = []
             for urn in urns:
@@ -105,6 +117,12 @@ class DataHubMetadataService:
                     continue
                 filtered_urns.append(urn)
             urns = filtered_urns
+        else:
+            aspects = self._fetch_entity_aspects(
+                entity_name="dataset",
+                urns=urns,
+                aspect_names=["versionProperties", "datasetProperties"],
+            )
 
         output = []
         for urn in urns:
@@ -126,12 +144,28 @@ class DataHubMetadataService:
             if schema_name and schema.lower() != schema_name.lower():
                 continue
 
-            output.append({
+            entry = {
                 "TABLE_NAME": table,
+                "TABLE_TYPE": "",
+                "DESCRIPTION": "",
                 "database": db,
                 "schema": schema,
                 "urn": urn,
-            })
+            }
+
+            # Extract TABLE_TYPE and DESCRIPTION from datasetProperties
+            props: DatasetPropertiesClass | None = aspects.get(urn, {}).get("datasetProperties")
+            if props:
+                entry["DESCRIPTION"] = props.description or ""
+                if props.customProperties:
+                    entry["TABLE_TYPE"] = props.customProperties.get("TABLE_TYPE", "")
+
+            # Include version info if available
+            vp: VersionPropertiesClass | None = aspects.get(urn, {}).get("versionProperties")
+            if vp and hasattr(vp, 'version') and vp.version:
+                entry["version"] = vp.version.get("versionTag", "") if isinstance(vp.version, dict) else str(vp.version)
+
+            output.append(entry)
         return json.dumps(output, indent=2)
 
     # ------------------------------------------------------------------
@@ -140,12 +174,13 @@ class DataHubMetadataService:
     def list_columns(self, dataset_urn: str, include_draft: bool = False) -> str:
         """
         List columns (schema fields) for a given dataset URN.
+        Includes TABLE_TYPE and DESCRIPTION from dataset properties.
         Excludes datasets tagged 'Draft' by default.
         """
         aspects = self._fetch_entity_aspects(
             entity_name="dataset",
             urns=[dataset_urn],
-            aspect_names=["schemaMetadata", "globalTags"],
+            aspect_names=["schemaMetadata", "globalTags", "datasetProperties"],
         )
 
         entity = aspects.get(dataset_urn, {})
@@ -167,7 +202,26 @@ class DataHubMetadataService:
                 "DESCRIPTION": field.description or "",
             })
 
-        return json.dumps([{"urn": dataset_urn, "columns": columns}], indent=2)
+        # Extract table-level properties
+        props: DatasetPropertiesClass | None = entity.get("datasetProperties")
+        table_name = schema.schemaName
+        table_type = ""
+        table_desc = ""
+        if props:
+            table_name = props.name or table_name
+            table_desc = props.description or ""
+            if props.customProperties:
+                table_type = props.customProperties.get("TABLE_TYPE", "")
+
+        result = {
+            "TABLE_NAME": table_name,
+            "TABLE_TYPE": table_type,
+            "DESCRIPTION": table_desc,
+            "COLUMNS": columns,
+            "urn": dataset_urn,
+        }
+
+        return json.dumps(result, indent=2)
 
     # ------------------------------------------------------------------
     # 3. SQL fragments for a dataset
@@ -250,9 +304,13 @@ class DataHubMetadataService:
     # ------------------------------------------------------------------
     # 5. Business terms
     # ------------------------------------------------------------------
-    def get_business_terms(self) -> str:
+    def get_business_terms(self, term_group: str | None = None) -> str:
         """
         Return approved business glossary terms (excludes 'Draft').
+
+        Args:
+            term_group: If provided, only return terms belonging to this
+                        glossary node (term group) by matching parentNode.
         """
         urns = list(self.graph.get_urns_by_filter(
             entity_types=["glossaryTerm"],
@@ -266,6 +324,11 @@ class DataHubMetadataService:
             aspect_names=["globalTags", "glossaryTermInfo"],
         )
 
+        # Pre-compute the expected parent node URN when filtering by group
+        expected_parent_urn = None
+        if term_group:
+            expected_parent_urn = f"urn:li:glossaryNode:{self._slugify(term_group)}"
+
         output = []
         for urn in urns:
             entity = aspects.get(urn, {})
@@ -277,6 +340,10 @@ class DataHubMetadataService:
                 continue
 
             if info:
+                # Filter by term group if requested
+                if expected_parent_urn and info.parentNode != expected_parent_urn:
+                    continue
+
                 name = info.name or urn.split(":")[-1]
                 output.append({
                     "term": name,

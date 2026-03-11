@@ -30,7 +30,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ----- Ingestion commands -----
     p_it = sub.add_parser("ingest-tables", help="Ingest tables from YAML")
-    p_it.add_argument("--file", default="data/tables.yaml", help="Path to tables YAML")
+    p_it.add_argument("--file", default="data/table_cols.yaml", help="Path to tables YAML")
     p_it.add_argument("--platform", default=None, help="Data platform (e.g. postgres)")
     p_it.add_argument("--env", default=None, help="Environment (PROD/DEV/STAGING)")
     p_it.add_argument("--db", default=None, help="Database name (e.g. mydb)")
@@ -59,7 +59,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("query-templates", help="Get global query templates")
 
-    sub.add_parser("business-terms", help="Get approved business terms")
+    p_bt = sub.add_parser("business-terms", help="Get approved business terms")
+    p_bt.add_argument("--group", default=None, help="Filter by term group name (e.g. Finance)")
 
     p_th = sub.add_parser("term-history", help="Get version history of a term")
     p_th.add_argument("--urn", required=True, help="Glossary term URN")
@@ -106,7 +107,7 @@ def main():
         elif args.command == "query-templates":
             print(svc.get_query_templates())
         elif args.command == "business-terms":
-            print(svc.get_business_terms())
+            print(svc.get_business_terms(term_group=args.group))
 
     elif args.command == "term-history":
         from services.version_history import VersionHistoryService

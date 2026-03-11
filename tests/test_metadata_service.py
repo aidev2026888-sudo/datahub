@@ -156,16 +156,24 @@ class TestDataHubMetadataService(unittest.TestCase):
             ],
         )
         no_tags = GlobalTagsClass(tags=[])
+        props = DatasetPropertiesClass(
+            name="t1",
+            description="this is a test table",
+            customProperties={"TABLE_TYPE": "denormalized"},
+        )
         svc.graph.get_entities.return_value = {
             dataset_urn: {
                 "schemaMetadata": _aspect_tuple(schema),
                 "globalTags": _aspect_tuple(no_tags),
+                "datasetProperties": _aspect_tuple(props),
             },
         }
 
         result = json.loads(svc.list_columns(dataset_urn))
-        self.assertEqual(len(result), 1)
-        cols = result[0]["columns"]
+        self.assertEqual(result["TABLE_NAME"], "t1")
+        self.assertEqual(result["TABLE_TYPE"], "denormalized")
+        self.assertEqual(result["DESCRIPTION"], "this is a test table")
+        cols = result["COLUMNS"]
         self.assertEqual(len(cols), 2)
         self.assertEqual(cols[0]["NAME"], "id")
         self.assertEqual(cols[0]["COL_TYPE"], "bigint")
@@ -298,6 +306,73 @@ class TestDataHubMetadataService(unittest.TestCase):
         result = json.loads(svc.get_business_terms())
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["term"], "FY starts with feb")
+
+    def test_get_business_terms_filters_by_group(self, MockGraph):
+        """Only terms whose parentNode matches the requested group are returned."""
+        svc = self._make_service(MockGraph)
+        svc.graph.get_urns_by_filter.return_value = [
+            "urn:li:glossaryTerm:finance_term",
+            "urn:li:glossaryTerm:ops_term",
+        ]
+
+        no_tags = GlobalTagsClass(tags=[])
+        finance_info = MagicMock(spec=GlossaryTermInfoClass)
+        finance_info.name = "FY starts with feb"
+        finance_info.definition = "Fiscal year begins in February"
+        finance_info.parentNode = "urn:li:glossaryNode:finance"
+
+        ops_info = MagicMock(spec=GlossaryTermInfoClass)
+        ops_info.name = "Cost type 1 is actual"
+        ops_info.definition = "Cost type 1 means actual cost"
+        ops_info.parentNode = "urn:li:glossaryNode:operations"
+
+        svc.graph.get_entities.return_value = {
+            "urn:li:glossaryTerm:finance_term": {
+                "globalTags": _aspect_tuple(no_tags),
+                "glossaryTermInfo": _aspect_tuple(finance_info),
+            },
+            "urn:li:glossaryTerm:ops_term": {
+                "globalTags": _aspect_tuple(no_tags),
+                "glossaryTermInfo": _aspect_tuple(ops_info),
+            },
+        }
+
+        result = json.loads(svc.get_business_terms(term_group="Finance"))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["term"], "FY starts with feb")
+
+    def test_get_business_terms_no_group_returns_all(self, MockGraph):
+        """When no group filter is provided, all non-Draft terms are returned."""
+        svc = self._make_service(MockGraph)
+        svc.graph.get_urns_by_filter.return_value = [
+            "urn:li:glossaryTerm:finance_term",
+            "urn:li:glossaryTerm:ops_term",
+        ]
+
+        no_tags = GlobalTagsClass(tags=[])
+        finance_info = MagicMock(spec=GlossaryTermInfoClass)
+        finance_info.name = "FY starts with feb"
+        finance_info.definition = "Fiscal year begins in February"
+        finance_info.parentNode = "urn:li:glossaryNode:finance"
+
+        ops_info = MagicMock(spec=GlossaryTermInfoClass)
+        ops_info.name = "Cost type 1 is actual"
+        ops_info.definition = "Cost type 1 means actual cost"
+        ops_info.parentNode = "urn:li:glossaryNode:operations"
+
+        svc.graph.get_entities.return_value = {
+            "urn:li:glossaryTerm:finance_term": {
+                "globalTags": _aspect_tuple(no_tags),
+                "glossaryTermInfo": _aspect_tuple(finance_info),
+            },
+            "urn:li:glossaryTerm:ops_term": {
+                "globalTags": _aspect_tuple(no_tags),
+                "glossaryTermInfo": _aspect_tuple(ops_info),
+            },
+        }
+
+        result = json.loads(svc.get_business_terms())
+        self.assertEqual(len(result), 2)
 
 
 if __name__ == "__main__":

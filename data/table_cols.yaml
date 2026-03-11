@@ -1,5 +1,7 @@
 tables:
   - TABLE_NAME: t1
+    TABLE_TYPE: "denormalized"
+    DESCRIPTION: "this is a test table"
     COLUMNS:
       - NAME: col1
         COL_TYPE: bigint
