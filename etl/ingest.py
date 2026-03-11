@@ -154,8 +154,8 @@ def _version_mcps(
     """
     Emit MCPs to link an entity to a VersionSet.
 
-    Creates the VersionSet (if needed) and attaches VersionProperties
-    to the entity.
+    DataHub's versioning service auto-creates the VersionSet when an entity
+    references it via VersionProperties — no need to emit VersionSetProperties.
 
     Args:
         entity_urn: URN of the versioned entity.
@@ -164,15 +164,6 @@ def _version_mcps(
         version_label: Human-readable version label (e.g. 'v_20260311_232800').
     """
     version_set_urn = f"urn:li:versionSet:({version_set_id},{entity_type})"
-
-    # Create / update the VersionSet entity
-    vs_props = VersionSetPropertiesClass(
-        latest=entity_urn,
-        versioningScheme="ALPHANUMERIC_GENERATED_BY_DATAHUB",
-    )
-    vs_mcp = MetadataChangeProposalWrapper(
-        entityUrn=version_set_urn, aspect=vs_props,
-    )
 
     # Attach VersionProperties to the entity
     version_tag = VersionTagClass(versionTag=version_label)
@@ -185,7 +176,7 @@ def _version_mcps(
         entityUrn=entity_urn, aspect=v_props,
     )
 
-    return [vs_mcp, v_mcp]
+    return [v_mcp]
 
 
 # ---------------------------------------------------------------------------
