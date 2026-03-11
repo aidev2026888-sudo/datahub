@@ -165,6 +165,7 @@ def _version_mcps(
 
     # Create / update the VersionSet entity
     vs_props = VersionSetPropertiesClass(
+        latest=entity_urn,
         versioningScheme="ALPHANUMERIC_GENERATED_BY_DATAHUB",
     )
     vs_mcp = MetadataChangeProposalWrapper(
