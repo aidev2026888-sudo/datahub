@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ETL Ingestion Module — reads YAML source files and emits metadata to DataHub.
 
@@ -39,6 +40,7 @@ from datahub.metadata.schema_classes import (
     TagPropertiesClass,
     VersionPropertiesClass,
     VersionSetPropertiesClass,
+    VersionTagClass,
 )
 
 import config
@@ -173,9 +175,11 @@ def _version_mcps(
     )
 
     # Attach VersionProperties to the entity
+    version_tag = VersionTagClass(versionTag=version_label)
     v_props = VersionPropertiesClass(
         versionSet=version_set_urn,
-        version={"versionTag": version_label},
+        version=version_tag,
+        sortId=version_label,
     )
     v_mcp = MetadataChangeProposalWrapper(
         entityUrn=entity_urn, aspect=v_props,
