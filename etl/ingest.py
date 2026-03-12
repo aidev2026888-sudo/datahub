@@ -285,8 +285,12 @@ def ingest_tables(
                     )
                 )
         if editable_fields:
+            now_ms = int(time.time() * 1000)
+            audit_stamp = AuditStampClass(time=now_ms, actor="urn:li:corpuser:datahub")
             editable_schema = EditableSchemaMetadataClass(
                 editableSchemaFieldInfo=editable_fields,
+                created=audit_stamp,
+                lastModified=audit_stamp,
             )
             mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=editable_schema))
 
