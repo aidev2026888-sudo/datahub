@@ -41,6 +41,8 @@ from datahub.metadata.schema_classes import (
     VersionPropertiesClass,
     VersionSetPropertiesClass,
     VersionTagClass,
+    EditableSchemaMetadataClass,
+    EditableSchemaFieldInfoClass,
 )
 
 import config
@@ -270,6 +272,23 @@ def ingest_tables(
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=schema_obj))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=props))
         mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=DRAFT_TAG))
+
+        # --- Editable schema (column descriptions visible in UI) ---
+        editable_fields = []
+        for col in columns:
+            col_desc = col.get("DESCRIPTION", "")
+            if col_desc:
+                editable_fields.append(
+                    EditableSchemaFieldInfoClass(
+                        fieldPath=col["NAME"],
+                        description=col_desc,
+                    )
+                )
+        if editable_fields:
+            editable_schema = EditableSchemaMetadataClass(
+                editableSchemaFieldInfo=editable_fields,
+            )
+            mcps.append(MetadataChangeProposalWrapper(entityUrn=dataset_urn, aspect=editable_schema))
 
         # --- Link to VersionSet ---
         mcps.extend(_version_mcps(
