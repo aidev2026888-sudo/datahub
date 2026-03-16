@@ -28,6 +28,8 @@ from datahub.metadata.schema_classes import (
     GlossaryTermInfoClass,
     GlobalTagsClass,
     VersionPropertiesClass,
+    EditableSchemaMetadataClass,
+    EditableDatasetPropertiesClass,
 )
 
 
@@ -104,11 +106,11 @@ class DataHubMetadataService:
         urns = urns[:200]
 
         if not include_draft:
-            # Batch-fetch globalTags + versionProperties + datasetProperties
+            # Batch-fetch globalTags + versionProperties + datasetProperties + editableDatasetProperties
             aspects = self._fetch_entity_aspects(
                 entity_name="dataset",
                 urns=urns,
-                aspect_names=["globalTags", "versionProperties", "datasetProperties"],
+                aspect_names=["globalTags", "versionProperties", "datasetProperties", "editableDatasetProperties"],
             )
             filtered_urns = []
             for urn in urns:
@@ -121,7 +123,7 @@ class DataHubMetadataService:
             aspects = self._fetch_entity_aspects(
                 entity_name="dataset",
                 urns=urns,
-                aspect_names=["versionProperties", "datasetProperties"],
+                aspect_names=["versionProperties", "datasetProperties", "editableDatasetProperties"],
             )
 
         output = []
@@ -159,6 +161,11 @@ class DataHubMetadataService:
                 entry["DESCRIPTION"] = props.description or ""
                 if props.customProperties:
                     entry["TABLE_TYPE"] = props.customProperties.get("TABLE_TYPE", "")
+                    
+            # Override with editable description if available
+            editable_props: EditableDatasetPropertiesClass | None = aspects.get(urn, {}).get("editableDatasetProperties")
+            if editable_props and getattr(editable_props, "description", None):
+                entry["DESCRIPTION"] = editable_props.description
 
             # Include version info if available
             vp: VersionPropertiesClass | None = aspects.get(urn, {}).get("versionProperties")
@@ -180,7 +187,7 @@ class DataHubMetadataService:
         aspects = self._fetch_entity_aspects(
             entity_name="dataset",
             urns=[dataset_urn],
-            aspect_names=["schemaMetadata", "globalTags", "datasetProperties"],
+            aspect_names=["schemaMetadata", "editableSchemaMetadata", "globalTags", "datasetProperties", "editableDatasetProperties"],
         )
 
         entity = aspects.get(dataset_urn, {})
@@ -194,24 +201,38 @@ class DataHubMetadataService:
         if not isinstance(schema, SchemaMetadataClass):
             return json.dumps([{"error": f"No schema found for dataset {dataset_urn}."}])
 
+        editable_schema: EditableSchemaMetadataClass | None = entity.get("editableSchemaMetadata")
+        editable_descriptions = {}
+        if editable_schema and hasattr(editable_schema, "editableSchemaFieldInfo"):
+            for ed_field in editable_schema.editableSchemaFieldInfo:
+                if getattr(ed_field, "description", None):
+                    editable_descriptions[ed_field.fieldPath] = ed_field.description
+
         columns = []
         for field in schema.fields:
+            desc = editable_descriptions.get(field.fieldPath, field.description or "")
             columns.append({
                 "NAME": field.fieldPath,
                 "COL_TYPE": field.nativeDataType,
-                "DESCRIPTION": field.description or "",
+                "DESCRIPTION": desc,
             })
 
         # Extract table-level properties
         props: DatasetPropertiesClass | None = entity.get("datasetProperties")
+        editable_props: EditableDatasetPropertiesClass | None = entity.get("editableDatasetProperties")
+        
         table_name = schema.schemaName
         table_type = ""
         table_desc = ""
+        
         if props:
             table_name = props.name or table_name
             table_desc = props.description or ""
             if props.customProperties:
                 table_type = props.customProperties.get("TABLE_TYPE", "")
+                
+        if editable_props and getattr(editable_props, "description", None):
+            table_desc = editable_props.description
 
         result = {
             "TABLE_NAME": table_name,
