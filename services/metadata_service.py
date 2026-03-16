@@ -178,12 +178,19 @@ class DataHubMetadataService:
     # ------------------------------------------------------------------
     # 2. List columns
     # ------------------------------------------------------------------
-    def list_columns(self, dataset_urn: str, include_draft: bool = False) -> str:
+    def list_columns(self, dataset_name: str, include_draft: bool = False, env: str = "DEV") -> str:
         """
-        List columns (schema fields) for a given dataset URN.
+        List columns (schema fields) for a given dataset URN or dataset name.
         Includes TABLE_TYPE and DESCRIPTION from dataset properties.
         Excludes datasets tagged 'Draft' by default.
         """
+        if not dataset_name.startswith("urn:li:dataset:"):
+            # Build URN from dataset name
+            # for example: mssql.finance.direct_cost.RptBudgetAndCosts
+            # will be transformed to: urn:li:dataset:(urn:li:dataPlatform:mssql,finance.direct_cost.RptBudgetAndCosts,DEV)
+            platform, qualified_name = dataset_name.split(".", 1)
+            dataset_urn = f"urn:li:dataset:(urn:li:dataPlatform:{platform},{qualified_name},{env})"
+
         aspects = self._fetch_entity_aspects(
             entity_name="dataset",
             urns=[dataset_urn],
